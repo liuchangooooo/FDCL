@@ -80,7 +80,7 @@ class MotionDecoderWorkspace(BaseWorkspace):
         self.train_motion_decoder(cfg, dataset_dir)
 
     def load_dataloader(self, cfg, dataset_dir):
-        dataset_dir = os.path.join(cfg.dataset_dir,'dataset')
+        dataset_dir = os.path.join(cfg.dataset_dir,'sampler_dataset')
         batch_size = cfg.training.batch_size        
         dataset = StateDataset(dataset_dir=dataset_dir,
                                 obs_dim=self.env.obs_dim[0],

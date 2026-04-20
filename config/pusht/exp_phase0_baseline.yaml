@@ -1,0 +1,48 @@
+# Phase 0 实验：Baseline（随机障碍物）
+defaults:
+  - train_td3_mujoco_obstacle
+  - _self_
+
+# 修改 workspace 类为 TD3CurriculumWorkspace
+_target_: DIVO.workspace.rl_workspace.td3_curriculum_workspace.TD3CurriculumWorkspace
+
+# 修改实验名称
+exp_name: phase0_baseline_random
+task_name: td3_pusht_phase0_baseline
+
+# 课程学习配置（新增）
+curriculum:
+  use_llm_obstacles: false  # 不使用 LLM，使用环境默认的随机障碍物
+  episodes_per_config: 10
+
+# 修改训练配置（只修改 num_epochs，其他保持不变）
+training:
+  num_epochs: 500  # 训练 500 epochs
+  device: ${device}
+  seed: 42
+  checkpoint_every: 10000
+  validate: true
+  validate_steps: 5000
+  n_env_validate: 20
+  regularize_z: gaussian
+  reg_coeff: 1.0
+
+# 修改日志配置
+logging:
+  project: pusht_phase0_comparison
+  resume: True
+  mode: online
+  name: ${now:%Y.%m.%d-%H.%M.%S}_phase0_baseline
+  tags: ["phase0", "baseline", "random"]
+  id: null
+  group: phase0_comparison
+
+# 修改输出目录
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_phase0_baseline
+  sweep:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_phase0_baseline
+    subdir: ${hydra.job.num}

@@ -1,0 +1,67 @@
+# Phase 0 实验：使用 LLM Stage A 生成障碍物
+defaults:
+  - train_td3_mujoco_obstacle
+  - _self_
+
+# 修改 workspace 类为 TD3CurriculumWorkspace
+_target_: DIVO.workspace.rl_workspace.td3_curriculum_workspace.TD3CurriculumWorkspace
+
+# 修改实验名称
+exp_name: phase0_llm_stage_a
+task_name: td3_pusht_phase0_llm
+
+# 修改环境为支持 LLM 的版本
+env:
+  _target_: pusht_mujoco_llm  # 使用支持 set_obstacle_config 的环境
+  obstacle: True
+  obstacle_num: 2
+  obstacle_size: 0.01
+  obstacle_shape: box
+  obstacle_dist: between
+  action_scale: ${action_scale}
+  NUM_SUBSTEPS: ${NUM_SUBSTEPS}
+  action_dim: [6, ]
+  obs_dim: [8, ]
+  action_reg: True
+  reg_coeff: 1.0
+  dynamics_randomization: True
+
+# 课程学习配置（新增）
+curriculum:
+  use_llm_obstacles: true  # 使用 LLM 生成障碍物
+  api_type: deepseek
+  model: deepseek-chat
+  enable_acgs_loop: False  # 关闭 ACGS 循环，直接使用 LLM 生成的障碍物进行训练
+
+# 修改训练配置（只修改 num_epochs，其他保持不变）
+training:
+  num_epochs: 1000000  # 训练 1000000 epochs
+  
+  device: ${device}
+  seed: 42
+  checkpoint_every: 10000
+  validate: true
+  validate_steps: 5000
+  n_env_validate: 20
+  regularize_z: gaussian
+  reg_coeff: 1.0
+
+# 修改日志配置
+logging:
+  project: pusht_phase0_comparison
+  resume: True
+  mode: online
+  name: ${now:%Y.%m.%d-%H.%M.%S}_phase0_llm_stage_a
+  tags: ["phase0", "llm", "stage_a"]
+  id: null
+  group: phase0_comparison
+
+# 修改输出目录
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_phase0_llm
+  sweep:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_phase0_llm
+    subdir: ${hydra.job.num}

@@ -14,7 +14,7 @@ num_episodes: 10
 num_render: 10
 seed: 0
 
-output_dir: data/outputs/2025.05.20/23.45.44_td3_pusht_mujuco_obstacle/evaluation
+output_dir: data/outputs/2025.12.18/21.36.11_td3_pusht_mujuco_obstacle/evaluation
 
 env:
   _target_: pusht_mujoco
@@ -35,13 +35,13 @@ env:
   dynamics_randomization : False
 
 sampler:
-  checkpoint: data/outputs/2025.05.20/23.45.44_td3_pusht_mujuco_obstacle/sampler/2025.05.21.15.28.55_FlowSampler/flowmodel_epoch=140_valloss=0.8543.pt
+  checkpoint: data/outputs/2025.12.18/21.36.11_td3_pusht_mujuco_obstacle/sampler/2025.12.19.11.08.25_FlowSampler/flowmodel_epoch=190_valloss=0.7819.pt
 
 motion_decoder:
-  checkpoint: data/outputs/2025.05.20/23.45.44_td3_pusht_mujuco_obstacle/motion_decoder/2025.05.21.18.32.02_TCNMotionDecoder/tcn_epoch=600_valloss=0.0005.pt
+  checkpoint: data/outputs/2025.12.18/21.36.11_td3_pusht_mujuco_obstacle/motion_decoder/2025.12.19.20.33.01_TCNMotionDecoder/tcn_epoch=250_valloss=0.0007.pt
   
 policy:
-  checkpoint: data/outputs/2025.05.20/23.45.44_td3_pusht_mujuco_obstacle/checkpoints/model_latest.pt
+  checkpoint: data/outputs/2025.12.18/21.36.11_td3_pusht_mujuco_obstacle/checkpoints/model_latest.pt
 
 hydra:  
   output_subdir: null  

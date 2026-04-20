@@ -1,0 +1,234 @@
+defaults:
+  - _self_
+
+# ===== 对比实验 Exp B: TD3 + LLM 课程障碍物 (Ours) =====
+_target_: DIVO.workspace.rl_workspace.td3_curriculum_workspace.TD3CurriculumWorkspace
+
+name: train
+task_name: td3_pusht_llm_curriculum
+exp_name: exp_llm_curriculum
+
+# ===== 障碍物数量配置（可通过命令行修改）=====
+# 使用方式：
+#   1 个障碍物: python train.py --config-name=exp_llm_curriculum obstacle_num=1
+#   2 个障碍物: python train.py --config-name=exp_llm_curriculum obstacle_num=2 (默认)
+#   3 个障碍物: python train.py --config-name=exp_llm_curriculum obstacle_num=3
+#
+# obs_dim 和 obsaction_dim 会自动计算，无需手动指定
+obstacle_num: 2  # 默认 2 个障碍物
+
+latent_dim: 3
+# 维度映射表：按 obstacle_num 自动选择 obs_dim / obsaction_dim
+# 若要支持更多障碍物数量，在此处继续补充键值即可
+dim_by_obstacle:
+  "1":
+    obs_dim: 6
+    obsaction_dim: 12
+  "2":
+    obs_dim: 8
+    obsaction_dim: 14
+  "3":
+    obs_dim: 10
+    obsaction_dim: 16
+  "4":
+    obs_dim: 12
+    obsaction_dim: 18
+
+obs_dim: ${oc.select:dim_by_obstacle.${obstacle_num}.obs_dim}
+state_dim: 4
+action_size: 6
+statelatent_dim: 7
+obsaction_dim: ${oc.select:dim_by_obstacle.${obstacle_num}.obsaction_dim}
+
+max_steps: 10
+NUM_SUBSTEPS: 25
+action_scale: 4
+device: "cuda:0"
+
+# ===== LLM 障碍物生成 + ACGS 闭环配置 =====
+# 使用方式：
+#   Phase 0 测试（不启用 ACGS）: python train.py --config-name=exp_llm_curriculum curriculum.enable_acgs_loop=False
+#   ACGS 测试（启用 ACGS）:     python train.py --config-name=exp_llm_curriculum curriculum.enable_acgs_loop=True (默认)
+curriculum:
+  use_llm: True
+  use_llm_obstacles: True
+  api_type: "deepseek"
+  api_key: null  # 从环境变量 DEEPSEEK_API_KEY 读取
+  model: "deepseek-chat"
+  episodes_per_config: 1
+  fix_tblock_with_obstacles: False
+  # ACGS 闭环配置
+  enable_acgs_loop: True            # 启用闭环（Phase 0 测试时设为 False）
+  evaluation_interval: 5000         # 每 N 个 episode 检查一次是否需要 evolve
+  frame_buffer_size: 5              # 失败回放保留最后 K 帧
+  max_failure_replays: 20           # 每批次最多存储的失败回放数
+  max_success_replays: 5            # 每批次最多存储的成功回放数
+  # 条件触发参数
+  warmup_success_threshold: 0.15    # warmup 退出条件：成功率首次 >= 此值
+  warmup_min_episodes: 5000         # warmup 最少 episode 数（即使成功率达标也要跑够）
+  first_evolve_episode: 5000        # 第一次 evolve 固定触发点（达到该 episode 后首个批次触发）
+  warmup_max_episodes: 20000        # warmup 最大 episode 数（超时后强制触发 evolve）
+  warmup_failure_threshold: 0.05    # warmup 失败检测：成功率 < 此值视为失败
+  success_rate_impossible: 0.05     # 不可能完成检测：成功率 < 此值触发 "impossible" evolve
+  success_rate_high: 0.75           # 成功率 > 此值 → 环境太简单，触发 evolve
+  success_rate_low: 0.30            # 成功率 < 此值 → 环境太难，触发 evolve
+  plateau_threshold: 0.03           # 连续 K 个批次成功率变化 < 此值 → 瓶颈
+  plateau_window: 3                 # 瓶颈检测窗口（检查最近 K 个批次）
+  evolve_cooldown: 10000            # evolve 后冷却期（等待 N 个 episode 再检查）
+
+# ===== 训练环境: LLM 版本 (尺寸与 baseline 一致) =====
+env:
+  _target_: pusht_mujoco_llm
+  obstacle: True
+  obstacle_num: ${obstacle_num}  # 使用顶层配置的障碍物数量
+  obstacle_size: 0.01
+  obstacle_shape: box
+  obstacle_dist: between
+  action_scale: ${action_scale}
+  NUM_SUBSTEPS: ${NUM_SUBSTEPS}
+  action_dim: [6, ]
+  obs_dim:
+    - ${obs_dim}  # 保持为 list，兼容 workspace 中 self.env.obs_dim[0] 的读取
+  action_reg: True
+  reg_coeff: 1.0
+  dynamics_randomization: True
+
+# ===== 无障碍评估环境 (与 Baseline 完全相同) =====
+no_obs_env:
+  _target_: pusht_mujoco
+  obstacle: False
+  obstacle_size: 0.01
+  obstacle_dist: random
+  action_scale: ${action_scale}
+  NUM_SUBSTEPS: ${NUM_SUBSTEPS}
+  action_dim: [6, ]
+  obs_dim: [6, ]
+  action_reg: True
+  reg_coeff: 1.0
+
+# ===== 未见障碍评估环境 (与 Baseline 完全相同) =====
+unseen_env:
+  _target_: pusht_mujoco
+  obstacle: True
+  obstacle_size: 0.05
+  obstacle_dist: random
+  action_scale: ${action_scale}
+  NUM_SUBSTEPS: ${NUM_SUBSTEPS}
+  action_dim: [6, ]
+  obs_dim: [6, ]
+  action_reg: True
+  reg_coeff: 1.0
+
+policy:
+  _target_: ldpi
+  encoder_net:
+    _target_: fc_vec
+    in_chan: ${obs_dim}
+    out_chan: ${latent_dim}
+    l_hidden: [512, 512, 512]
+    activation: ['relu', 'relu', 'relu']
+    out_activation: 'linear'
+  decoder_net:
+    _target_: fc_vec
+    in_chan: ${statelatent_dim}
+    out_chan: ${action_size}
+    l_hidden: [512, 512, 512]
+    activation: ['relu', 'relu', 'relu']
+    out_activation: 'tanh'
+
+critic:
+  _target_: mcritic
+  n_critics: 2
+  net0:
+    _target_: fc_vec
+    in_chan: ${obsaction_dim}
+    out_chan: 1
+    l_hidden: [512, 512, 512]
+    activation: ['relu', 'relu', 'relu']
+    out_activation: 'linear'
+  net1:
+    _target_: fc_vec
+    in_chan: ${obsaction_dim}
+    out_chan: 1
+    l_hidden: [512, 512, 512]
+    activation: ['relu', 'relu', 'relu']
+    out_activation: 'linear'
+
+evaluator:
+  _target_: mujoco_pusht
+  output_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${task_name}/log
+  num_episodes: 20
+  max_steps: ${max_steps}
+  device: ${device}
+  num_save_video: 3
+  reward: last
+
+rl:
+  replay_buffer_size: 1000000
+  batch_size: 64
+  warmup: 100
+  gamma: 0.9
+  critic_gradient_clip: False
+  critic_gradient_max_norm: 1
+  policy_gradient_clip: False
+  policy_gradient_max_norm: 1
+  add_noise: True
+  noise_sigma: 0.2
+  noise_epsilon: 5000
+  soft_update_tau: 0.001
+  policy_update: 1
+
+optimizer:
+  _target_: torch.optim.AdamW
+  betas: [0.95, 0.999]
+  eps: 1.0e-08
+  lr: 0.0001
+  weight_decay: 1.0e-06
+
+critic_optimizer:
+  _target_: torch.optim.AdamW
+  betas: [0.95, 0.999]
+  eps: 1.0e-08
+  lr: 0.0001
+  weight_decay: 1.0e-06
+
+training:
+  num_epochs: 1000000
+  device: ${device}
+  seed: 42
+  checkpoint_every: 10000
+  validate: true
+  validate_steps: 5000
+  n_env_validate: 20
+  regularize_z: gaussian
+  reg_coeff: 1.0
+
+log: True
+log_interval: 500
+
+logging:
+  project: ACGS-Comparison
+  resume: True
+  mode: online
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${task_name}_${obstacle_num}_obstacle
+  tags: ["${task_name}", "${exp_name}", "llm_curriculum"]
+  id: null
+  group: "comparison_v1"
+
+checkpoint:
+  topk:
+    monitor_key: test_mean_score
+    mode: max
+    k: 10
+    format_str: 'epoch={epoch:04d}-test_mean_score={test_mean_score:.3f}.ckpt'
+  save_last_ckpt: True
+  save_last_snapshot: False
+
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${task_name}
+  sweep:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${task_name}
+    subdir: ${hydra.job.num}

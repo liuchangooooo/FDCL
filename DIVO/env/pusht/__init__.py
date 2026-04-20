@@ -46,6 +46,26 @@ def get_pusht_env(**class_args):
             eval=eval,
             dynamics_randomization=dynamics_randomization,
         )
+    elif target == 'pusht_mujoco_llm':
+        from DIVO.env.pusht.mujoco.pusht_mj_rod_llm import PushT_mj_rod_LLM
+        env = PushT_mj_rod_LLM(
+            obstacle=class_args["obstacle"],
+            obstacle_num=obstacle_num,
+            obstacle_size=class_args["obstacle_size"],
+            obstacle_shape=obstacle_shape,
+            obstacle_dist=class_args["obstacle_dist"],
+            record_frame=False,
+            action_dim=class_args["action_dim"],
+            obs_dim=class_args["obs_dim"],
+            action_scale=class_args["action_scale"],
+            NUM_SUBSTEPS=class_args["NUM_SUBSTEPS"],
+            action_reg=class_args["action_reg"],
+            reg_coeff=class_args["reg_coeff"],
+            generate_dataset=generate_dataset,
+            motion_pred=motion_pred,
+            eval=eval,
+            dynamics_randomization=dynamics_randomization,
+        )
     else:
         raise NotImplementedError(f"Env type {target} not implemented.")
 

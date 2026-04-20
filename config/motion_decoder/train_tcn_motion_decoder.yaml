@@ -7,7 +7,7 @@ task_name: TCNMotionDecoder
 exp_name: run1
 
 device: "cuda:0"
-dataset_dir: data/outputs/2025.05.20/23.45.44_td3_pusht_mujuco_obstacle/ 
+dataset_dir: data/outputs/2025.12.18/21.36.11_td3_pusht_mujuco_obstacle
 
 NUM_SUBSTEPS: 5
 len_traj: 200 # 1000/NUM_SUBSTEPS
@@ -38,7 +38,7 @@ env:
   motion_pred: true
 
 policy:
-  checkpoint: data/outputs/2025.05.20/23.45.44_td3_pusht_mujuco_obstacle/checkpoints/model_latest.pt
+  checkpoint: data/outputs/2025.12.18/21.36.11_td3_pusht_mujuco_obstacle/checkpoints/model_latest.pt
 
 motion_decoder:
   _target_: tcn

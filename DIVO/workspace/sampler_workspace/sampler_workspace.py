@@ -174,7 +174,7 @@ class SamplerWorkspace(BaseWorkspace):
             pbar.close()
 
     def load_dataloader(self, cfg, dataset_dir):
-        dataset_dir = os.path.join(dataset_dir, 'dataset')
+        dataset_dir = os.path.join(dataset_dir, 'sampler_dataset')
         dataset = StateDataset(dataset_dir=dataset_dir,
                                 obs_dim=self.env.obs_dim[0],
                                 action_dim=self.env.action_dim[0],

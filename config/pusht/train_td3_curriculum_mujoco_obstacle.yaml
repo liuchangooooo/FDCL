@@ -1,10 +1,12 @@
 defaults:
   - _self_
-_target_: DIVO.workspace.rl_workspace.td3_workspace.TD3Workspace
+
+# ===== 使用课程学习版本的 Workspace =====
+_target_: DIVO.workspace.rl_workspace.td3_curriculum_workspace.TD3CurriculumWorkspace
 
 name: train
-task_name: td3_pusht_mujuco_obstacle
-exp_name: run1
+task_name: td3_pusht_curriculum
+exp_name: curriculum_v1
 
 latent_dim: 3
 obs_dim: 8  # 4 (T-block) + 2 * obstacle_num (2) = 8
@@ -18,18 +20,33 @@ NUM_SUBSTEPS: 25 #2s/NUM_SUBSTEPS = control time
 action_scale: 4 #limit action around T block
 device: "cuda:0"
 
+# ===== 课程学习 + ACGS 闭环配置 =====
+curriculum:
+  use_llm: True
+  use_llm_obstacles: True
+  use_adaptive: True
+  api_type: "deepseek"
+  api_key: null  # 从环境变量 DEEPSEEK_API_KEY 读取
+  model: "deepseek-chat"
+  # ACGS 闭环
+  enable_acgs_loop: True
+  evaluation_interval: 100
+  frame_buffer_size: 5
+  max_failure_replays: 20
+  max_success_replays: 5
 
+# ===== 使用 LLM 版本的环境 =====
 env:
-  _target_: pusht_mujoco
+  _target_: pusht_mujoco_llm  # 使用 LLM 版本
   obstacle: True
   obstacle_num: 2
-  obstacle_size: 0.01
-  obstacle_shape: box #box, sphere
-  obstacle_dist: between #random, aroundT, between
+  obstacle_size: 0.05
+  obstacle_shape: box
+  obstacle_dist: random
   action_scale: ${action_scale}
   NUM_SUBSTEPS: ${NUM_SUBSTEPS}
   action_dim: [6, ]
-  obs_dim: [8, ]  # 4 + 2 * obstacle_num (2) = 8
+  obs_dim: [8, ]
   action_reg: True
   reg_coeff: 1.0
   dynamics_randomization: True
@@ -38,7 +55,7 @@ no_obs_env:
   _target_: pusht_mujoco
   obstacle: False
   obstacle_size: 0.01
-  obstacle_dist: random #random, aroundT, between
+  obstacle_dist: random
   action_scale: ${action_scale}
   NUM_SUBSTEPS: ${NUM_SUBSTEPS}
   action_dim: [6, ]
@@ -50,7 +67,7 @@ unseen_env:
   _target_: pusht_mujoco
   obstacle: True
   obstacle_size: 0.05
-  obstacle_dist: random #random, aroundT, between
+  obstacle_dist: random
   action_scale: ${action_scale}
   NUM_SUBSTEPS: ${NUM_SUBSTEPS}
   action_dim: [6, ]
@@ -115,7 +132,7 @@ rl:
   noise_sigma : 0.2
   noise_epsilon : 5000
   soft_update_tau : 0.001
-  policy_update : 1 # policy update per n critic update
+  policy_update : 1
 
 optimizer:
   _target_: torch.optim.AdamW
@@ -143,18 +160,18 @@ training:
   validate: true
   validate_steps: 5000
   n_env_validate : 20
-  regularize_z: gaussian # norm, gaussian, False
+  regularize_z: gaussian
   reg_coeff: 1.0
 
 log : True
 log_interval: 500
 
 logging:
-  project: DivPolicy
+  project: DivPolicy-Curriculum
   resume: True
   mode: online
   name: ${now:%Y.%m.%d-%H.%M.%S}_${task_name}
-  tags: ["${task_name}", "${exp_name}"]
+  tags: ["${task_name}", "${exp_name}", "curriculum"]
   id: null
   group: null
 
@@ -162,7 +179,7 @@ checkpoint:
   topk:
     monitor_key: test_mean_score
     mode: max
-    k: 10 # save top k checkpoints
+    k: 10
     format_str: 'epoch={epoch:04d}-test_mean_score={test_mean_score:.3f}.ckpt'
   save_last_ckpt: True
   save_last_snapshot: False

@@ -78,7 +78,7 @@ If you use this work, please cite:
   keywords={Training;Mutual information;Trajectory;Reinforcement learning;Artificial intelligence;Technological innovation;Navigation;Information filters;Dynamics;Stochastic processes;Reinforcement learning;motion and path planning},
   doi={10.1109/LRA.2025.3532162}}
 ```
-
+1111111111
 ---
 
 ## Acknowledgements

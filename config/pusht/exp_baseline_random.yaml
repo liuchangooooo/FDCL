@@ -1,44 +1,47 @@
 defaults:
   - _self_
+
+# ===== 对比实验 Exp A: TD3 + 随机障碍物 (Baseline) =====
 _target_: DIVO.workspace.rl_workspace.td3_workspace.TD3Workspace
 
 name: train
-task_name: td3_pusht_mujuco_obstacle
-exp_name: run1
+task_name: td3_pusht_baseline_random
+exp_name: exp_baseline_random
 
 latent_dim: 3
 obs_dim: 8  # 4 (T-block) + 2 * obstacle_num (2) = 8
 state_dim: 4
 action_size: 6
-statelatent_dim : 7
+statelatent_dim: 7
 obsaction_dim: 14  # obs_dim (8) + action_size (6) = 14
 
-max_steps : 10
-NUM_SUBSTEPS: 25 #2s/NUM_SUBSTEPS = control time
-action_scale: 4 #limit action around T block
+max_steps: 10
+NUM_SUBSTEPS: 25
+action_scale: 4
 device: "cuda:0"
 
-
+# ===== 训练环境: 与 baseline 完全一致 =====
 env:
   _target_: pusht_mujoco
   obstacle: True
   obstacle_num: 2
   obstacle_size: 0.01
-  obstacle_shape: box #box, sphere
-  obstacle_dist: between #random, aroundT, between
+  obstacle_shape: box
+  obstacle_dist: between
   action_scale: ${action_scale}
   NUM_SUBSTEPS: ${NUM_SUBSTEPS}
   action_dim: [6, ]
-  obs_dim: [8, ]  # 4 + 2 * obstacle_num (2) = 8
+  obs_dim: [8, ]
   action_reg: True
   reg_coeff: 1.0
   dynamics_randomization: True
 
+# ===== 无障碍评估环境: 与 baseline 完全一致 =====
 no_obs_env:
   _target_: pusht_mujoco
   obstacle: False
   obstacle_size: 0.01
-  obstacle_dist: random #random, aroundT, between
+  obstacle_dist: random
   action_scale: ${action_scale}
   NUM_SUBSTEPS: ${NUM_SUBSTEPS}
   action_dim: [6, ]
@@ -46,11 +49,12 @@ no_obs_env:
   action_reg: True
   reg_coeff: 1.0
 
+# ===== 未见障碍评估环境: 与 baseline 完全一致 =====
 unseen_env:
   _target_: pusht_mujoco
   obstacle: True
   obstacle_size: 0.05
-  obstacle_dist: random #random, aroundT, between
+  obstacle_dist: random
   action_scale: ${action_scale}
   NUM_SUBSTEPS: ${NUM_SUBSTEPS}
   action_dim: [6, ]
@@ -78,7 +82,7 @@ policy:
 critic:
   _target_: mcritic
   n_critics: 2
-  net0: 
+  net0:
     _target_: fc_vec
     in_chan: ${obsaction_dim}
     out_chan: 1
@@ -104,33 +108,29 @@ evaluator:
 
 rl:
   replay_buffer_size: 1000000
-  batch_size : 64
-  warmup : 100
-  gamma : 0.9
-  critic_gradient_clip : False
-  critic_gradient_max_norm : 1
-  policy_gradient_clip : False
-  policy_gradient_max_norm : 1
+  batch_size: 64
+  warmup: 100
+  gamma: 0.9
+  critic_gradient_clip: False
+  critic_gradient_max_norm: 1
+  policy_gradient_clip: False
+  policy_gradient_max_norm: 1
   add_noise: True
-  noise_sigma : 0.2
-  noise_epsilon : 5000
-  soft_update_tau : 0.001
-  policy_update : 1 # policy update per n critic update
+  noise_sigma: 0.2
+  noise_epsilon: 5000
+  soft_update_tau: 0.001
+  policy_update: 1
 
 optimizer:
   _target_: torch.optim.AdamW
-  betas:
-  - 0.95
-  - 0.999
+  betas: [0.95, 0.999]
   eps: 1.0e-08
   lr: 0.0001
   weight_decay: 1.0e-06
-  
+
 critic_optimizer:
   _target_: torch.optim.AdamW
-  betas:
-  - 0.95
-  - 0.999
+  betas: [0.95, 0.999]
   eps: 1.0e-08
   lr: 0.0001
   weight_decay: 1.0e-06
@@ -142,36 +142,27 @@ training:
   checkpoint_every: 10000
   validate: true
   validate_steps: 5000
-  n_env_validate : 20
-  regularize_z: gaussian # norm, gaussian, False
+  n_env_validate: 20
+  regularize_z: gaussian
   reg_coeff: 1.0
 
-log : True
+log: True
 log_interval: 500
 
 logging:
-  project: DivPolicy
+  project: ACGS-Comparison
   resume: True
   mode: online
   name: ${now:%Y.%m.%d-%H.%M.%S}_${task_name}
-  tags: ["${task_name}", "${exp_name}"]
+  tags: ["${task_name}", "${exp_name}", "baseline"]
   id: null
-  group: null
+  group: "comparison_v1"
 
 checkpoint:
   topk:
     monitor_key: test_mean_score
     mode: max
-    k: 10 # save top k checkpoints
+    k: 10
     format_str: 'epoch={epoch:04d}-test_mean_score={test_mean_score:.3f}.ckpt'
   save_last_ckpt: True
   save_last_snapshot: False
-  
-hydra:
-  job:
-    override_dirname: ${name}
-  run:
-    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${task_name}
-  sweep:
-    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${task_name}
-    subdir: ${hydra.job.num}
