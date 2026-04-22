@@ -143,6 +143,7 @@ class ACGS_API:
         success_replays_text: str,
         current_generator_code: Optional[str] = None,
         num_obstacles: int = 2,
+        history_records: Optional[List[Dict]] = None,
     ) -> Optional[str]:
         """
         根据失败诊断生成新的障碍物生成器代码。含重试 + sanity check。
@@ -172,6 +173,7 @@ class ACGS_API:
             failure_replays_text=failure_replays_text,
             success_replays_text=success_replays_text,
             current_generator_code=current_generator_code,
+            history_records=history_records,
         )
 
         old_code = self.topology_generator_code
@@ -251,6 +253,7 @@ class ACGS_API:
         failure_replays_text: str,
         success_replays_text: str,
         current_generator_code: Optional[str] = None,
+        history_records: Optional[List[Dict]] = None,
     ) -> tuple:
         """
         返回 (system_prompt, user_prompt) 文本，用于日志记录。
@@ -265,5 +268,6 @@ class ACGS_API:
             failure_replays_text=failure_replays_text,
             success_replays_text=success_replays_text,
             current_generator_code=current_generator_code or self.topology_generator_code,
+            history_records=history_records,
         )
         return system, user

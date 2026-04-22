@@ -450,6 +450,10 @@ class TD3CurriculumWorkspace(BaseWorkspace):
         self._failure_vector_history = []   # 每个 batch 一条：failure distribution + diagnosis
         self._acgs_evolve_history = []      # 每次 evolve 一条：预留 accepted/rejected
 
+        # Revision history（diagnosis_history_block 用）
+        self._pending_revision_record = None        # evolve 触发时创建，下一 batch 结束时 finalize
+        self._finalized_revision_history = []       # finalized records，取最近 3 条传给 prompt
+
         if self.enable_acgs_loop:
             print(f"\n [1.2] ACGS loop enabled: eval every {self.evaluation_interval} episodes, "
                   f"frame buffer K={self.frame_buffer_size}")
@@ -778,8 +782,50 @@ class TD3CurriculumWorkspace(BaseWorkspace):
             'sample_count': sample_count,
         }
 
+    def _determine_revision_template(self, reason: str) -> str:
+        """根据 reason 确定 revision template 名称。"""
+        reason_norm = (reason or "").lower()
+        if "too_easy" in reason_norm or "too easy" in reason_norm:
+            return "Challenge-Up"
+        if any(k in reason_norm for k in ("too_hard", "too hard", "impossible", "warmup_failed")):
+            return "Recovery"
+        if "plateau" in reason_norm:
+            return "Layout-Shift"
+        return "Balanced"
+
+    def _generate_revision_summary(self, reason: str, fv_result, diagnosis) -> str:
+        """根据 reason + dominant_failure_type 规则化生成 revision action summary。"""
+        dominant = fv_result.get('dominant_type', 'unknown') if fv_result else 'unknown'
+        reason_norm = (reason or "").lower()
+
+        if any(k in reason_norm for k in ("too_hard", "too hard", "impossible", "warmup_failed")):
+            if 'fall' in dominant:
+                return "reduced pressure to lower fall risk"
+            if dominant.endswith('_early'):
+                return "reduced pressure near the initial region"
+            if 'timeout' in dominant:
+                return "simplified layout to restore reachability"
+            return f"reduced overall difficulty targeting {dominant}"
+
+        if "too_easy" in reason_norm or "too easy" in reason_norm:
+            return f"increased structured challenge targeting {dominant}"
+
+        if "plateau" in reason_norm:
+            return "shifted to a different layout family"
+
+        return "made conservative learnable adjustments"
+
     def _append_failure_vector_history(self, failure_vector_result, diagnosis, should_evolve, reason):
         """每个 batch 都记录一条 failure history（无论是否触发 evolve）。"""
+
+        # ===== 先 finalize 上一轮的 pending revision record =====
+        if self._pending_revision_record is not None:
+            current_sr = self._batch_stats.get('success', 0) / max(sum(self._batch_stats.values()), 1)
+            baseline_sr = self._pending_revision_record.get('baseline_success_rate', 0.0)
+            self._pending_revision_record['success_rate_change'] = current_sr - baseline_sr
+            self._finalized_revision_history.append(self._pending_revision_record)
+            self._pending_revision_record = None
+
         history_item = {
             'time': time.time(),
             'total_episode_count': self._total_episode_count,
@@ -970,7 +1016,7 @@ class TD3CurriculumWorkspace(BaseWorkspace):
             LOGGER.warning(f"[ACGS] Failed to extract/clean generate_obstacles: {e}")
             return None
 
-    def _build_acgs_prompt(self, reason="", fv_result=None, diagnosis=None):
+    def _build_acgs_prompt(self, reason="", fv_result=None, diagnosis=None, history_records=None):
         """将批次数据与失败诊断打包成 A-I 结构化 prompt。"""
         lines = []
 
@@ -1031,7 +1077,31 @@ class TD3CurriculumWorkspace(BaseWorkspace):
                 lines.append(f"- sample_count: {int(diagnosis.get('sample_count', 0))}")
             lines.append("")
 
-        # E. 调整指令（基于 reason + diagnosis 的三档模板）
+        # E. Diagnosis and revision history
+        lines.append("【诊断与修订历史】")
+        if history_records:
+            n = len(history_records)
+            for i, record in enumerate(history_records):
+                round_label = -(n - i)
+                lines.append(f"Round {round_label}")
+                lines.append(f"- trigger_reason: {record.get('trigger_reason', 'unknown')}")
+                lines.append(f"- dominant_failure_type: {record.get('dominant_failure_type', 'unknown')}")
+                lines.append(f"- diagnosis_reliability: {record.get('diagnosis_reliability', 'unknown')}")
+                lines.append(f"- failure_region: {record.get('failure_region', 'none')}")
+                lines.append(f"- revision_template: {record.get('revision_template', 'unknown')}")
+                lines.append(f"- revision_action_summary: {record.get('revision_action_summary', 'unknown')}")
+                sr_change = record.get('success_rate_change')
+                if sr_change is not None:
+                    sign = "+" if sr_change >= 0 else ""
+                    lines.append(f"- success_rate_change: {sign}{sr_change:.2f}")
+                else:
+                    lines.append("- success_rate_change: (pending)")
+                lines.append("")
+        else:
+            lines.append("(no revision history available yet)")
+            lines.append("")
+
+        # F. 调整指令（基于 reason + diagnosis 的三档模板）
         lines.append("【调整指令（失败驱动三档模板）】")
         lines.append(f"- trigger_reason: {reason if reason else 'unspecified'}")
         lines.append(f"- dominant_failure_type_for_adjustment: {dominant_type}")
@@ -1273,6 +1343,7 @@ class TD3CurriculumWorkspace(BaseWorkspace):
                 reason=reason,
                 fv_result=failure_vector_result,
                 diagnosis=diagnosis,
+                history_records=self._finalized_revision_history[-3:],
             )
             self._log_acgs(f"[ACGS] Prompt length: {len(prompt)} chars")
 
@@ -1301,6 +1372,18 @@ class TD3CurriculumWorkspace(BaseWorkspace):
                     # evolve 成功后清空成功率历史，重新开始观察
                     self._success_rate_history.clear()
                     evolve_record['accepted'] = True
+
+                    # ===== 创建 pending revision record =====
+                    current_sr = self._batch_stats.get('success', 0) / max(sum(self._batch_stats.values()), 1)
+                    self._pending_revision_record = {
+                        'trigger_reason': reason,
+                        'dominant_failure_type': failure_vector_result.get('dominant_type', 'unknown'),
+                        'diagnosis_reliability': diagnosis.get('reliability', 'weak') if diagnosis else 'weak',
+                        'failure_region': diagnosis.get('failure_region', {}).get('label', 'none') if diagnosis else 'none',
+                        'revision_template': self._determine_revision_template(reason),
+                        'revision_action_summary': self._generate_revision_summary(reason, failure_vector_result, diagnosis),
+                        'baseline_success_rate': current_sr,
+                    }
                 else:
                     evolve_record['rejected_reason'] = 'load_failed'
                     self._log_acgs("[ACGS] Evolve failed: generated code could not be loaded")

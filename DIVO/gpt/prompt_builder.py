@@ -84,57 +84,66 @@ class PromptBuilder:
 
     def _format_batch_stats(self, batch_stats: Dict[str, int]) -> str:
         total = max(sum(batch_stats.values()), 1)
-        lines = []
+        lines = [f"- total_episodes: {total}"]
         for key in ("success", "collision", "timeout", "fall"):
-            cnt = batch_stats.get(key, 0)
+            cnt = int(batch_stats.get(key, 0))
             lines.append(f"- {key}: {cnt} ({cnt / total:.1%})")
         return "\n".join(lines)
 
     def _format_failure_distribution(self, fv_result: Optional[Dict]) -> str:
         if fv_result is None:
             return "(not available)"
-        lines = []
+
         distribution = fv_result.get("distribution", {})
         counts = fv_result.get("counts", {})
+        dominant = fv_result.get(
+            "dominant_failure_type", fv_result.get("dominant_type", "unknown")
+        )
+        total = int(sum(int(counts.get(k, 0)) for k in _FAILURE_KEYS))
+
+        lines = [
+            f"- total_samples: {total}",
+            f"- dominant_failure_type: {dominant}",
+        ]
         for key in _FAILURE_KEYS:
             ratio = float(distribution.get(key, 0.0))
             cnt = int(counts.get(key, 0))
             lines.append(f"- {key}: {ratio:.1%} ({cnt})")
-        dominant = fv_result.get(
-            "dominant_failure_type", fv_result.get("dominant_type", "unknown")
-        )
-        lines.append(f"- dominant_failure_type: {dominant}")
         return "\n".join(lines)
 
     def _format_failure_diagnosis(self, diagnosis: Optional[Dict]) -> str:
         if diagnosis is None:
             return "(not available)"
-        reliability = diagnosis.get("reliability", "weak")
+
+        diag_rel = diagnosis.get("diagnosis_reliability", {})
+        reliability = diagnosis.get("reliability", diag_rel.get("label", "weak"))
+
         lines = [f"- reliability: {reliability}"]
 
         if reliability in ("strong", "medium"):
             region = diagnosis.get("failure_region", {})
             bias = diagnosis.get("behavior_bias", {})
             source = bias.get("source", diagnosis.get("behavior_source", "none"))
+
             lines.append(
                 f"- failure_region: {region.get('label', 'none')} "
                 f"(confidence={float(region.get('confidence', 0.0)):.2f})"
             )
-            lines.append(
-                f"- behavior_bias: {bias.get('label', 'none')} "
-                f"(confidence={float(bias.get('confidence', 0.0)):.2f}, source={source})"
-            )
+
+            if bias and bias.get("label", "none") != "none":
+                lines.append(
+                    f"- behavior_bias: {bias.get('label', 'none')} "
+                    f"(confidence={float(bias.get('confidence', 0.0)):.2f}, source={source}, role=secondary)"
+                )
+
             lines.append(f"- sample_count: {int(diagnosis.get('sample_count', 0))}")
         else:
+            lines.append("- targeting_mode: conservative")
             lines.append(
-                "- The current failure pattern is not spatially concentrated "
-                "enough for precise targeting."
-            )
-            lines.append(
-                "- Focus on dominant failure type and overall failure "
-                "distribution conservatively."
+                "- note: the current failure pattern is not spatially concentrated enough for precise targeting"
             )
             lines.append(f"- sample_count: {int(diagnosis.get('sample_count', 0))}")
+
         return "\n".join(lines)
 
     def _format_revision_instruction(
@@ -144,84 +153,72 @@ class PromptBuilder:
         diagnosis: Optional[Dict],
         fall_rate: float,
         timeout_rate: float,
-    ) -> str:
-        """根据 reason + diagnosis 生成三档调整指令。"""
+        ) -> str:
+        """根据 reason + diagnosis 生成失败驱动的调整指令。"""
         diag_reliable = False
         if diagnosis is not None:
-            diag_reliable = bool(diagnosis.get("is_reliable", False))
+            diag_rel = diagnosis.get("diagnosis_reliability", {})
+            diag_reliable = bool(
+                diagnosis.get("is_reliable", diag_rel.get("is_reliable", False))
+            )
 
         lines = []
         lines.append(f"- trigger_reason: {reason if reason else 'unspecified'}")
         lines.append(f"- dominant_failure_type: {dominant_type}")
-        lines.append("- Global: preserve solvability, avoid trivially impossible layouts.")
+        lines.append("- Global: preserve solvability and avoid trivially impossible layouts.")
         lines.append("- Global: do not uniformly increase difficulty; target the dominant failure risk.")
 
         reason_norm = (reason or "").lower()
         is_too_easy = "too_easy" in reason_norm or "too easy" in reason_norm
-        is_too_hard = any(k in reason_norm for k in ("too_hard", "too hard", "impossible", "warmup_failed"))
+        is_too_hard = any(
+            k in reason_norm for k in ("too_hard", "too hard", "impossible", "warmup_failed")
+        )
         is_plateau = "plateau" in reason_norm
 
         if is_too_easy:
             lines.append("- Template: Challenge-Up")
             lines.append(f"- Objective: increase challenge targeting {dominant_type}.")
-            lines.append("- Preserve at least one feasible alternative route.")
+            lines.append("- Preserve at least one feasible transport route.")
             if diag_reliable:
                 region = diagnosis.get("failure_region", {})
-                bias = diagnosis.get("behavior_bias", {})
                 lines.append(
                     f"- Region hint: increase pressure near {region.get('label', 'unknown')} "
                     f"(conf={float(region.get('confidence', 0.0)):.2f})."
                 )
-                lines.append(
-                    f"- Behavior hint: challenge the dominant pattern "
-                    f"{bias.get('label', 'unknown')} "
-                    f"(conf={float(bias.get('confidence', 0.0)):.2f})."
-                )
 
         elif is_too_hard:
             lines.append("- Template: Recovery")
-            lines.append(f"- Objective: reduce {dominant_type} risk, restore learnability.")
+            lines.append(f"- Objective: reduce {dominant_type} risk and restore learnability.")
             if dominant_type.startswith("collision_") and dominant_type.endswith("_early"):
-                lines.append("- Reduce early collision risk; avoid strong frontal obstruction near start.")
+                lines.append("- Reduce early collision risk; avoid strong obstruction near the initial region.")
             if fall_rate > 0.3:
                 lines.append(
-                    f"- WARNING: fall rate is {fall_rate:.1%}. "
-                    "Reduce out-of-bounds risk; improve early controllability."
+                    f"- Warning: fall rate is {fall_rate:.1%}. "
+                    "Reduce out-of-bounds risk and improve early controllability."
                 )
             if timeout_rate > 0.3:
-                lines.append("- Ensure at least one clear passable route to goal.")
+                lines.append("- Ensure at least one feasible transport route remains available.")
             if diag_reliable:
                 region = diagnosis.get("failure_region", {})
-                bias = diagnosis.get("behavior_bias", {})
                 lines.append(
-                    f"- Region hint: reduce obstacle density near "
-                    f"{region.get('label', 'unknown')} "
+                    f"- Region hint: reduce obstacle density near {region.get('label', 'unknown')} "
                     f"(conf={float(region.get('confidence', 0.0)):.2f})."
-                )
-                lines.append(
-                    f"- Behavior hint: reduce frontal blocking along "
-                    f"{bias.get('label', 'unknown')}."
                 )
 
         elif is_plateau:
             lines.append("- Template: Layout-Shift")
-            lines.append("- Objective: change obstacle topology structure, not just coordinates.")
+            lines.append("- Objective: change the obstacle layout family or topology structure, not just local coordinates.")
             lines.append("- Avoid repeating the current dominant interference pattern.")
             if diag_reliable:
                 region = diagnosis.get("failure_region", {})
-                bias = diagnosis.get("behavior_bias", {})
                 lines.append(
-                    f"- Region hint: shift interference away from "
-                    f"{region.get('label', 'unknown')}; introduce new spatial distribution."
-                )
-                lines.append(
-                    f"- Behavior hint: discourage the habitual path "
-                    f"{bias.get('label', 'unknown')}; encourage alternative strategies."
+                    f"- Region hint: shift interference away from {region.get('label', 'unknown')} "
+                    "and introduce a new spatial distribution."
                 )
 
         else:
             lines.append("- Template: Balanced")
-            lines.append("- Objective: make small learnable adjustments based on failure distribution.")
+            lines.append("- Objective: make conservative, learnable adjustments without changing the overall layout family too aggressively.")
 
         return "\n".join(lines)
 
