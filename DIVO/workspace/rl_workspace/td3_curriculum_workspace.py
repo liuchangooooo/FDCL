@@ -39,6 +39,7 @@ from DIVO.env.pusht.llm_topology_generator import (
     StrategyExecutor,
     build_phase0_prompt_stage_a
 )
+from DIVO.gpt.acgs_api import ACGS_API
 
 
 LOGGER = logging.getLogger(__name__)
@@ -193,8 +194,9 @@ class TD3CurriculumWorkspace(BaseWorkspace):
     
     def _init_llm_generator(self, cfg):
         """初始化 LLM 拓扑生成器（Stage A）"""
-        self.llm_generator = None
-        self.executor = None
+        self.acgs_api = None
+        self.llm_generator = None   # deprecated，保留兼容
+        self.executor = None        # deprecated，保留兼容
         self.topology_generator_code = None
         self.obstacle_num = getattr(cfg.env, 'obstacle_num', 2)
         
@@ -211,7 +213,6 @@ class TD3CurriculumWorkspace(BaseWorkspace):
             print(f" [1.1] This is a baseline experiment")
             return
         
-        curriculum_cfg = getattr(cfg, 'curriculum', None)
         if curriculum_cfg is None:
             print("\n [1.1] No curriculum config, LLM generator disabled")
             return
@@ -225,23 +226,33 @@ class TD3CurriculumWorkspace(BaseWorkspace):
         
         if api_key:
             try:
-                # 初始化 LLM 生成器和执行器
-                self.llm_generator = LLMTopologyGenerator(
+                prompt_dir = os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                    "gpt", "prompt"
+                )
+                task_name = getattr(curriculum_cfg, 'task_name', 'PushT')
+
+                self.acgs_api = ACGS_API(
+                    task_name=task_name,
+                    prompt_dir=prompt_dir,
                     api_type=api_type,
                     api_key=api_key,
                     model=model,
                     temperature=0.7,
-                    verbose=False
+                    obstacle_size=0.01,
+                    target_pose=[0, 0, -np.pi / 4],
+                    max_evolve_retries=3,
+                    sanity_check_count=5,
                 )
-                self.executor = StrategyExecutor(
-                    obstacle_size=0.01,  # 障碍物半边长 0.01m
-                    target_pose=[0, 0, -np.pi/4]  # 目标位姿
-                )
-                print(f"\n [1.1] LLM Topology Generator initialized (Stage A, model: {model})")
+                # 保留旧引用以兼容尚未迁移的代码
+                self.llm_generator = self.acgs_api  # deprecated
+                self.executor = self.acgs_api.executor  # deprecated
+                print(f"\n [1.1] ACGS_API initialized (task={task_name}, model={model})")
                 print(f" [1.1] Obstacle generation mode: LLM topology generator (every reset)")
-                print(f" [1.1] T-block position: sampled by environment, obstacles generated based on T-block")
             except Exception as e:
-                print(f"\n [1.1] LLM init failed: {e}")
+                print(f"\n [1.1] ACGS_API init failed: {e}")
+                import traceback
+                traceback.print_exc()
                 self.use_llm_obstacles = False
         else:
             print("\n [1.1] No API key found, LLM generator disabled")
@@ -252,7 +263,7 @@ class TD3CurriculumWorkspace(BaseWorkspace):
         if not self.use_llm_obstacles:
             return False
         
-        if self.llm_generator is None or self.executor is None:
+        if self.acgs_api is None:
             return False
         
         if self.topology_generator_code is not None:
@@ -261,29 +272,19 @@ class TD3CurriculumWorkspace(BaseWorkspace):
         try:
             print(f"\n[Stage A] Generating topology generator code (first time)...")
             
-            # 使用一个示例起点生成 prompt
             sample_tblock_pose = self._random_tblock_pose()
-            prompt = build_phase0_prompt_stage_a(
-                sample_tblock_pose,
-                num_obstacles=self.obstacle_num
+            code = self.acgs_api.init_generator(
+                np.array(sample_tblock_pose),
+                num_obstacles=self.obstacle_num,
             )
-            
-            # 调用 LLM 生成代码
-            code = self.llm_generator._call_llm(prompt)
-            code = self.llm_generator._extract_code(code)
             
             if code is None:
                 print("[Stage A] ❌ Code generation failed, disabling LLM obstacles")
                 self.use_llm_obstacles = False
                 return False
             
-            # 加载到执行器
-            if not self.executor.load_topology_generator(code):
-                print("[Stage A] ❌ Code loading failed, disabling LLM obstacles")
-                self.use_llm_obstacles = False
-                return False
-            
-            self.topology_generator_code = code
+            # 同步兼容缓存
+            self.topology_generator_code = self.acgs_api.topology_generator_code
             print(f"[Stage A] ✓ Topology generator loaded successfully")
             print(f"[Stage A] Code length: {len(code)} characters")
             return True
@@ -315,7 +316,7 @@ class TD3CurriculumWorkspace(BaseWorkspace):
         if not self.use_llm_obstacles:
             return None, None
 
-        if self.executor is None or not hasattr(self.env, 'set_obstacle_config'):
+        if self.acgs_api is None or not self.acgs_api.has_generator or not hasattr(self.env, 'set_obstacle_config'):
             return None, None
 
         attempt = 0
@@ -328,7 +329,7 @@ class TD3CurriculumWorkspace(BaseWorkspace):
                 tblock_pose_A = self._get_tblock_pose_from_obs(obs_temp)
 
                 # Step 2: 基于 A 生成障碍物（A 和障碍物绑定）
-                obstacles = self.executor.generate(tblock_pose_A, self.obstacle_num)
+                obstacles = self.acgs_api.generate_obstacles(tblock_pose_A, self.obstacle_num)
 
                 if not obstacles or len(obstacles) == 0:
                     # 生成为空，无障碍物直接返回
@@ -1331,65 +1332,102 @@ class TD3CurriculumWorkspace(BaseWorkspace):
             'error': None,
         }
 
-        if self.llm_generator is None or self.executor is None:
-            self._log_acgs("[ACGS] No LLM generator, skipping evolve")
-            evolve_record['rejected_reason'] = 'no_llm_generator'
+        if self.acgs_api is None:
+            self._log_acgs("[ACGS] No ACGS API, skipping evolve")
+            evolve_record['rejected_reason'] = 'no_acgs_api'
             self._acgs_evolve_history.append(evolve_record)
             self._reset_batch()
             return
 
         try:
-            prompt = self._build_acgs_prompt(
-                reason=reason,
+            # 准备结构化输入
+            failure_replays_text = ""
+            if self._batch_failure_replays:
+                by_type = {}
+                for r in self._batch_failure_replays:
+                    t = r['termination']
+                    if t not in by_type:
+                        by_type[t] = []
+                    by_type[t].append(r)
+                replay_lines = []
+                for term_type, replays in by_type.items():
+                    replay_lines.append(f"【失败回放 — {term_type}】")
+                    for r in replays[-2:]:
+                        replay_lines.append(self._format_replay_for_llm(r))
+                        replay_lines.append("")
+                failure_replays_text = "\n".join(replay_lines)
+
+            success_replays_text = ""
+            if self._batch_success_replays:
+                replay_lines = ["【成功回放（对照）】"]
+                for r in self._batch_success_replays[-2:]:
+                    replay_lines.append(self._format_replay_for_llm(r))
+                    replay_lines.append("")
+                success_replays_text = "\n".join(replay_lines)
+
+            current_generator_code = self._extract_clean_generate_obstacles()
+            history_records = self._finalized_revision_history[-3:]
+
+            # 记录 prompt 日志（用 get_prompt_text 确保和实际 evolve 一致）
+            _, user_prompt = self.acgs_api.get_prompt_text(
+                batch_stats=dict(self._batch_stats),
                 fv_result=failure_vector_result,
                 diagnosis=diagnosis,
-                history_records=self._finalized_revision_history[-3:],
+                reason=reason,
+                failure_replays_text=failure_replays_text,
+                success_replays_text=success_replays_text,
+                current_generator_code=current_generator_code,
+                history_records=history_records,
             )
-            self._log_acgs(f"[ACGS] Prompt length: {len(prompt)} chars")
-
-            # 每次 evolve 前，将完整 prompt 追加写入实验目录下的 evolve_prompt.log
+            self._log_acgs(f"[ACGS] Prompt length: {len(user_prompt)} chars")
             self._append_evolve_prompt_log(
-                prompt=prompt,
+                prompt=user_prompt,
                 reason=reason,
                 fv_result=failure_vector_result,
                 diagnosis=diagnosis,
             )
 
-            new_code = self.llm_generator.evolve(prompt)
+            # 调用 ACGS_API.evolve（内含重试 + sanity check）
+            new_code = self.acgs_api.evolve(
+                batch_stats=dict(self._batch_stats),
+                fv_result=failure_vector_result,
+                diagnosis=diagnosis,
+                reason=reason,
+                failure_replays_text=failure_replays_text,
+                success_replays_text=success_replays_text,
+                current_generator_code=current_generator_code,
+                num_obstacles=self.obstacle_num,
+                history_records=history_records,
+            )
+
             evolve_record['llm_generation_success'] = bool(new_code)
 
             if new_code:
-                load_success = bool(self.executor.load_topology_generator(new_code))
-                evolve_record['load_success'] = load_success
+                evolve_record['load_success'] = True
+                # 同步兼容缓存
+                self.topology_generator_code = self.acgs_api.topology_generator_code
+                self._evolve_count += 1
+                self._just_evolved = True
+                self._last_evolve_episode = self._total_episode_count
+                self._log_acgs(f"[ACGS] Evolve #{self._evolve_count} succeeded, new generator loaded "
+                               f"(cooldown {self.evolve_cooldown} eps)")
+                self._success_rate_history.clear()
+                evolve_record['accepted'] = True
 
-                if load_success:
-                    self.topology_generator_code = new_code
-                    self._evolve_count += 1
-                    self._just_evolved = True  # 设置标志，下一个 episode 会打印
-                    self._last_evolve_episode = self._total_episode_count  # 记录 evolve 时间点
-                    self._log_acgs(f"[ACGS] Evolve #{self._evolve_count} succeeded, new generator loaded "
-                                   f"(cooldown {self.evolve_cooldown} eps)")
-                    # evolve 成功后清空成功率历史，重新开始观察
-                    self._success_rate_history.clear()
-                    evolve_record['accepted'] = True
-
-                    # ===== 创建 pending revision record =====
-                    current_sr = self._batch_stats.get('success', 0) / max(sum(self._batch_stats.values()), 1)
-                    self._pending_revision_record = {
-                        'trigger_reason': reason,
-                        'dominant_failure_type': failure_vector_result.get('dominant_type', 'unknown'),
-                        'diagnosis_reliability': diagnosis.get('reliability', 'weak') if diagnosis else 'weak',
-                        'failure_region': diagnosis.get('failure_region', {}).get('label', 'none') if diagnosis else 'none',
-                        'revision_template': self._determine_revision_template(reason),
-                        'revision_action_summary': self._generate_revision_summary(reason, failure_vector_result, diagnosis),
-                        'baseline_success_rate': current_sr,
-                    }
-                else:
-                    evolve_record['rejected_reason'] = 'load_failed'
-                    self._log_acgs("[ACGS] Evolve failed: generated code could not be loaded")
+                # ===== 创建 pending revision record =====
+                current_sr = self._batch_stats.get('success', 0) / max(sum(self._batch_stats.values()), 1)
+                self._pending_revision_record = {
+                    'trigger_reason': reason,
+                    'dominant_failure_type': failure_vector_result.get('dominant_type', 'unknown'),
+                    'diagnosis_reliability': diagnosis.get('reliability', 'weak') if diagnosis else 'weak',
+                    'failure_region': diagnosis.get('failure_region', {}).get('label', 'none') if diagnosis else 'none',
+                    'revision_template': self._determine_revision_template(reason),
+                    'revision_action_summary': self._generate_revision_summary(reason, failure_vector_result, diagnosis),
+                    'baseline_success_rate': current_sr,
+                }
             else:
-                evolve_record['rejected_reason'] = 'llm_generation_failed'
-                self._log_acgs("[ACGS] Evolve failed: LLM did not return valid code")
+                evolve_record['rejected_reason'] = 'all_retries_failed'
+                self._log_acgs("[ACGS] Evolve failed after all retries")
 
         except Exception as e:
             evolve_record['error'] = str(e)
