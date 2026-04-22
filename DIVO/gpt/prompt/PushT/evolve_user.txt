@@ -1,0 +1,51 @@
+This round is a failure-driven evolution step for Push-T.
+Generate the next complete `generate_obstacles(tblock_pose, num_obstacles)` function.
+
+In this round:
+- use the dominant failure pattern as the main signal for change
+- use the current failure diagnosis to decide where and how the spatial structure should change
+- use diagnosis and revision history to determine the appropriate direction and scale of change
+- use success evidence as supporting context for which layout patterns remain learnable under the current policy
+- do not make generic or unguided changes
+
+Below is the structured evidence for the current round.
+
+B. Coarse-grained batch statistics
+{batch_stats_block}
+
+C. Fine-grained failure distribution
+{failure_distribution_block}
+
+D. Current failure diagnosis
+{failure_diagnosis_block}
+
+E. Diagnosis and revision history
+{diagnosis_history_block}
+
+F. Revision instruction
+{revision_instruction_block}
+
+G. Failure replays
+{failure_replays_block}
+
+H. Success replays
+{success_replays_block}
+
+I. Current generator summary and code
+{current_generator_block}
+
+Use the following Push-T semantics when interpreting the evidence:
+
+- The main objective is to enable learnable T-block transport to the target pose.
+- Obstacles may also affect whether feasible approach and contact configurations can be established.
+- A layout may be collision-free at initialization but still be too restrictive for pushing, bypass, transport, or final alignment.
+- Early failures usually indicate excessive obstruction or insufficient maneuvering space near the initial region.
+- Mid-stage failures usually indicate problems in the main transport corridor, bypass geometry, or local obstacle topology.
+- Late-stage failures usually indicate insufficient space for near-goal transport or final pose adjustment.
+
+For this round:
+- make the dominant failure mode the primary driver of revision
+- keep the task solvable and matched to the current policy capability
+- preserve useful and still-learnable layout patterns when supported by evidence
+- avoid repeating ineffective revision patterns
+- maintain diversity across calls

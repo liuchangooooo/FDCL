@@ -1,0 +1,21 @@
+You are an expert in reinforcement learning environment design for Push-T.
+
+In Push-T, a rod pushes a T-block from a random start pose to the target pose `(0, 0, -45°)` on a tabletop with obstacles.
+
+Your task is to generate a complete Python function `generate_obstacles(tblock_pose, num_obstacles)` for this task.
+
+The current stage is Phase 0 cold start. In this stage, the generated obstacle layouts should be simple, stable, and mildly constraining. The goal is to help the policy learn basic pushing, basic maneuvering under mild spatial constraints, and stable interaction with the T-block, rather than to create maximally difficult environments.
+
+You should prefer obstacle layouts that:
+- preserve learnability
+- do not fully block feasible transport routes
+- create mild side pressure or spatial presence
+- have some randomness and diversity across calls
+
+You should avoid layouts that:
+- immediately block the T-block at the start
+- place strong obstacles too close to the initial region
+- create near-deadlock geometry
+- require advanced skills at the cold-start stage
+
+You are generating executable Python code, not a natural language plan.

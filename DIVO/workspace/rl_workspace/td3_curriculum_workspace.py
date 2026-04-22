@@ -1,17 +1,3 @@
-"""
-TD3 Workspace with ACGS (Adversarial Curriculum Generation for Generative Simulation)
-
-闭环系统：策略诊断 → LLM 针对性生成 → 训练 → 再诊断
-
-数据采集：
-- 批次统计（成功/碰撞/超时/掉落）
-- 失败回放片段（起点 + 障碍物 + 最后K帧 + Q值）
-- 当前环境生成策略
-- Q 值序列
-
-每 evaluation_interval 个 episode 打包传给 LLM，由 LLM 自己分析失败模式并生成新环境。
-"""
-
 if __name__ == "__main__":
     import sys
     import os
@@ -71,7 +57,7 @@ _DIRECTION_LABELS_WITH_STATIONARY = _DIRECTION_LABELS + ["stationary"]
 _FAILURE_KEYS = [
     "success",
     "collision_rod_early",
-    "collision_rod_mid",
+    "collision_rod_mid",    
     "collision_rod_late",
     "collision_tblock_early",
     "collision_tblock_mid",

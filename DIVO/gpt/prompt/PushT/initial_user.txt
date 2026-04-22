@@ -1,0 +1,73 @@
+Scene:
+- Start tblock_pose: x={tx:.3f}, y={ty:.3f}, θ={theta_deg:.0f}°
+- Goal pose is fixed at: (0, 0, -45°)
+
+Physical parameters:
+- Table boundary: x,y ∈ [-0.25, 0.25] meters
+- T-block sampling range: x,y ∈ [-0.18, 0.18] meters
+- T-block size: horizontal bar 0.10m × 0.03m, vertical bar 0.03m × 0.07m, overall envelope about 0.10m × 0.10m
+- Obstacle size: 0.02m × 0.02m × 0.02m, half size 0.01m
+- Obstacle coordinate range: x,y ∈ [-0.2, 0.2] meters
+
+Available helper:
+- `is_safe(obs_x, obs_y, tblock_x, tblock_y, tblock_theta) -> bool`
+
+Helper semantics:
+- `is_safe(...)` uses precise SAT-based collision checking
+- it checks collision safety for the obstacle against the T-block at both:
+  - the current start pose `(tblock_x, tblock_y, tblock_theta)`
+  - the fixed goal pose `(0, 0, -45°)`
+- if `is_safe(...)` returns `False`, the candidate obstacle must be rejected
+
+Hard constraints:
+
+A. The function signature must be exactly:
+def generate_obstacles(tblock_pose: np.ndarray, num_obstacles: int) -> list:
+
+B. The return value must be a list of dicts with complete fields:
+[{'x': float, 'y': float, 'purpose': str}, ...]
+
+- The returned list must contain exactly `num_obstacles` obstacles
+- Every returned obstacle must satisfy all constraints
+
+C. Every obstacle must satisfy:
+- x,y ∈ [-0.2, 0.2]
+- is_safe(x, y, tx, ty, ttheta) == True
+
+D. Distance between any two obstacle centers must be greater than 0.03
+
+E. Phase 0 difficulty requirement:
+- Do not fully block feasible transport routes
+- Avoid strong obstruction too close to the initial region
+- Prefer mild pressure and spatial presence
+- Prefer side, edge, or corner placements
+
+Execution environment limits:
+- Only `np` may be used, either directly or via `import numpy as np`
+- Only `is_safe(...)` may be called as helper API
+- Do not import any module other than numpy
+- Do not use print, sorted, set, any, all, hash, or similar functions that may be unavailable in the sandbox
+
+A useful design pattern is:
+1. Read `tx`, `ty`, `ttheta`, and define `goal = (0, 0)`
+2. Compute the start-to-goal vector `v = [-tx, -ty]`, its unit direction `dir`, and perpendicular direction `perp`
+3. Add a soft corridor constraint to avoid blocking the main transport corridor:
+   - compute distance `d_seg` from a candidate point to the start-goal line segment
+   - reject candidates with `d_seg < corridor`
+   - a corridor width around 0.035 to 0.05 is reasonable
+4. Use a mixed sampling strategy to improve both success rate and diversity:
+   - Strategy 1: sample near the side of the route, around 35% to 80% along the path, then offset along `perp` by about 0.08 to 0.13
+   - Strategy 2: sample near corners or edges with small jitter
+5. For each obstacle:
+   - use rejection sampling
+   - try at most 50 times
+   - accept only if all hard constraints are satisfied and distance to existing obstacles is greater than 0.03
+6. If valid obstacles are still missing:
+   - continue sampling from safer edge or corner regions
+   - if repeated random sampling still fails, switch to more conservative fallback placements in safer regions
+   - ensure that exactly `num_obstacles` valid obstacles are eventually returned
+
+The randomness should reflect meaningful spatial variation rather than arbitrary noise.
+
+Purpose field:
+- Keep it short, for example: `side_pressure`, `edge_presence`, `corner_hint`
