@@ -222,6 +222,40 @@ class PromptBuilder:
 
         return "\n".join(lines)
 
+    def _format_diagnosis_history(self, history_records: Optional[List[Dict]]) -> str:
+        """
+        将最近 N 条 finalized revision history 格式化为 prompt 文本。
+
+        Args:
+            history_records: finalized history 列表（按时间顺序，最早在前）
+
+        Returns:
+            格式化的文本，如 "Round -3 ... Round -2 ... Round -1 ..."
+        """
+        if not history_records:
+            return "(no revision history available yet)"
+
+        lines = []
+        n = len(history_records)
+        for i, record in enumerate(history_records):
+            round_label = -(n - i)
+            lines.append(f"Round {round_label}")
+            lines.append(f"- trigger_reason: {record.get('trigger_reason', 'unknown')}")
+            lines.append(f"- dominant_failure_type: {record.get('dominant_failure_type', 'unknown')}")
+            lines.append(f"- diagnosis_reliability: {record.get('diagnosis_reliability', 'unknown')}")
+            lines.append(f"- failure_region: {record.get('failure_region', 'none')}")
+            lines.append(f"- revision_template: {record.get('revision_template', 'unknown')}")
+            lines.append(f"- revision_action_summary: {record.get('revision_action_summary', 'unknown')}")
+            sr_change = record.get('success_rate_change')
+            if sr_change is not None:
+                sign = "+" if sr_change >= 0 else ""
+                lines.append(f"- success_rate_change: {sign}{sr_change:.2f}")
+            else:
+                lines.append("- success_rate_change: (pending)")
+            lines.append("")
+
+        return "\n".join(lines).strip()
+
     # ================================================================
     # Evolve prompt — 组装
     # ================================================================
@@ -235,6 +269,7 @@ class PromptBuilder:
         failure_replays_text: str,
         success_replays_text: str,
         current_generator_code: Optional[str],
+        history_records: Optional[List[Dict]] = None,
     ) -> str:
         """加载 evolve_user.txt 模板并填充所有占位符。"""
         template = self._load_evolve_user_template()
@@ -260,7 +295,7 @@ class PromptBuilder:
             batch_stats_block=self._format_batch_stats(batch_stats),
             failure_distribution_block=self._format_failure_distribution(fv_result),
             failure_diagnosis_block=self._format_failure_diagnosis(diagnosis),
-            diagnosis_history_block="(not yet implemented)",
+            diagnosis_history_block=self._format_diagnosis_history(history_records),
             revision_instruction_block=self._format_revision_instruction(
                 reason=reason,
                 dominant_type=dominant_type,
