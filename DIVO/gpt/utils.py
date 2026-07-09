@@ -9,8 +9,9 @@ LLM 调用工具函数。
 
 import os
 import importlib
+import json
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 LOGGER = logging.getLogger(__name__)
 
@@ -36,6 +37,24 @@ def save_string_to_file(save_path: str, content: str):
         f.write(content)
 
 
+def _get_env_api_key(api_type: str) -> Optional[str]:
+    """按后端类型读取默认 API key。"""
+    if api_type == "deepseek":
+        return os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if api_type == "openai":
+        return os.getenv("OPENAI_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
+    raise ValueError(f"Unsupported api_type: {api_type}")
+
+
+def _get_env_base_url(api_type: str) -> Optional[str]:
+    """按后端类型读取默认 base_url。"""
+    if api_type == "deepseek":
+        return os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com"
+    if api_type == "openai":
+        return os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
+    raise ValueError(f"Unsupported api_type: {api_type}")
+
+
 def get_client(api_type: str = "deepseek",
                api_key: Optional[str] = None,
                base_url: Optional[str] = None):
@@ -53,26 +72,92 @@ def get_client(api_type: str = "deepseek",
         ) from _openai_import_error
 
     if api_key is None:
-        if api_type == "deepseek":
-            api_key = os.getenv("DEEPSEEK_API_KEY")
-        else:
-            api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            api_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY")
+        api_key = _get_env_api_key(api_type)
+
+    if base_url is None:
+        base_url = _get_env_base_url(api_type)
 
     if not api_key:
         raise ValueError("No API key found. Set DEEPSEEK_API_KEY or OPENAI_API_KEY.")
 
-    if api_type == "deepseek":
-        return _openai.OpenAI(
-            api_key=api_key,
-            base_url=base_url or "https://api.deepseek.com",
-        )
-    else:
-        return _openai.OpenAI(
-            api_key=api_key,
-            base_url=base_url,
-        )
+    if api_type not in {"deepseek", "openai"}:
+        raise ValueError(f"Unsupported api_type: {api_type}")
+
+    return _openai.OpenAI(
+        api_key=api_key,
+        base_url=base_url,
+    )
+
+
+def _content_to_text(content: Any) -> Optional[str]:
+    """Normalize OpenAI-compatible message content into plain text."""
+    if content is None:
+        return None
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+                elif isinstance(text, dict) and isinstance(text.get("value"), str):
+                    parts.append(text["value"])
+            else:
+                text = getattr(item, "text", None)
+                if isinstance(text, str):
+                    parts.append(text)
+                elif hasattr(text, "value") and isinstance(text.value, str):
+                    parts.append(text.value)
+        return "\n".join(parts) if parts else None
+    return str(content)
+
+
+def _extract_completion_text(completion: Any) -> Optional[str]:
+    """
+    Extract text from OpenAI SDK objects, OpenAI-compatible dicts, or proxies
+    that directly return a response string.
+    """
+    if completion is None:
+        return None
+    if isinstance(completion, str):
+        return completion
+
+    output_text = getattr(completion, "output_text", None)
+    if isinstance(output_text, str):
+        return output_text
+
+    if isinstance(completion, dict):
+        direct = completion.get("output_text") or completion.get("content")
+        text = _content_to_text(direct)
+        if text:
+            return text
+        choices = completion.get("choices") or []
+        if choices:
+            choice = choices[0]
+            if isinstance(choice, dict):
+                message = choice.get("message") or {}
+                if isinstance(message, dict):
+                    return _content_to_text(message.get("content"))
+                return _content_to_text(getattr(message, "content", None))
+            message = getattr(choice, "message", None)
+            if message is not None:
+                return _content_to_text(getattr(message, "content", None))
+            return _content_to_text(getattr(choice, "text", None))
+        return None
+
+    choices = getattr(completion, "choices", None)
+    if choices:
+        choice = choices[0]
+        message = getattr(choice, "message", None)
+        if message is not None:
+            return _content_to_text(getattr(message, "content", None))
+        return _content_to_text(getattr(choice, "text", None))
+
+    return None
 
 
 def llm_interaction(client,
@@ -108,9 +193,15 @@ def llm_interaction(client,
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
-            content = completion.choices[0].message.content
+            content = _extract_completion_text(completion)
             if content:
                 return content
+            LOGGER.warning(
+                "LLM call attempt %s/%s returned empty/unrecognized response type: %s",
+                attempt + 1,
+                max_retries,
+                type(completion).__name__,
+            )
         except Exception as e:
             LOGGER.warning(f"LLM call attempt {attempt + 1}/{max_retries} failed: {e}")
     LOGGER.error(f"LLM call failed after {max_retries} attempts")
@@ -124,7 +215,7 @@ def extract_code(response: str) -> Optional[str]:
     按优先级尝试：
     1. ```python ... ``` 代码块
     2. ``` ... ``` 代码块
-    3. def generate_obstacles 开头的代码
+    3. def generate_obstacles / def generate_maze_map 开头的代码
     4. 包含 import numpy 的整段响应
 
     Args:
@@ -135,6 +226,27 @@ def extract_code(response: str) -> Optional[str]:
     """
     if response is None:
         return None
+
+    if not isinstance(response, str):
+        response = _extract_completion_text(response)
+        if response is None:
+            return None
+
+    response = response.strip()
+    if not response:
+        return None
+
+    if response.startswith("{") or response.startswith("["):
+        try:
+            decoded = json.loads(response)
+        except json.JSONDecodeError:
+            decoded = None
+        if decoded is not None:
+            decoded_text = _extract_completion_text(decoded)
+            if decoded_text and decoded_text != response:
+                code = extract_code(decoded_text)
+                if code:
+                    return code
 
     # 方法 1：```python 代码块
     if "```python" in response:
@@ -156,6 +268,10 @@ def extract_code(response: str) -> Optional[str]:
     # 方法 3：def generate_obstacles
     if "def generate_obstacles" in response:
         start = response.find("def generate_obstacles")
+        return response[start:].strip()
+
+    if "def generate_maze_map" in response:
+        start = response.find("def generate_maze_map")
         return response[start:].strip()
 
     # 方法 4：整段响应

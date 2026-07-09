@@ -1,23 +1,22 @@
-"""
-ACGS API — 封装 LLM 障碍物生成器的完整生命周期。
-
-职责：
-- init_generator: 冷启动生成初始障碍物生成器
-- evolve: 根据失败诊断生成新的生成器（含重试 + sanity check）
-- generate_obstacles: 调用当前生成器生成障碍物
-
-参考 CurricuLLM/gpt/curriculum_api_chain_fetch.py 的封装模式。
-"""
-
 import logging
 import numpy as np
-from typing import Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from DIVO.gpt.utils import get_client, llm_interaction, extract_code
 from DIVO.gpt.prompt_builder import PromptBuilder
 from DIVO.env.pusht.llm_topology_generator import StrategyExecutor
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _preview_response(response, limit: int = 800) -> str:
+    if response is None:
+        return "<None>"
+    text = response if isinstance(response, str) else repr(response)
+    text = text.replace("\n", "\\n")
+    if len(text) > limit:
+        text = text[:limit] + "...<truncated>"
+    return text
 
 
 class ACGS_API:
@@ -31,7 +30,7 @@ class ACGS_API:
         api = ACGS_API(task_name="PushT", prompt_dir="DIVO/gpt/prompt", ...)
         api.init_generator(tblock_pose, num_obstacles)
         obstacles = api.generate_obstacles(tblock_pose, num_obstacles)
-        new_code = api.evolve(batch_stats, fv_result, diagnosis, reason, ...)
+        new_code = api.evolve(batch_stats, fv_result, reason, ...)
     """
 
     def __init__(
@@ -91,6 +90,26 @@ class ACGS_API:
         LOGGER.info(f"[ACGS_API] initialized: task={task_name}, model={model}, "
                      f"retries={max_evolve_retries}, sanity_checks={sanity_check_count}")
 
+    def load_generator_code(self, code: str) -> bool:
+        """
+        Load generator code into the runtime executor and cache it as the
+        current topology generator.
+        """
+        if not code:
+            return False
+        if not self.executor.load_topology_generator(code):
+            return False
+        self.topology_generator_code = code
+        return True
+
+    def load_generator_file(self, path: str) -> bool:
+        with open(path, "r", encoding="utf-8") as handle:
+            code = handle.read()
+        return self.load_generator_code(code)
+
+    def export_generator_code(self) -> Optional[str]:
+        return self.topology_generator_code
+
     # ================================================================
     # 冷启动
     # ================================================================
@@ -111,23 +130,40 @@ class ACGS_API:
 
         LOGGER.info("[ACGS_API] Generating initial topology generator...")
 
-        raw = llm_interaction(
-            self.client, self.model, system, user,
-            temperature=self.temperature, max_tokens=self.max_tokens,
-        )
-        code = extract_code(raw)
+        for attempt in range(self.max_evolve_retries):
+            LOGGER.info(
+                f"[ACGS_API] Initial generator attempt "
+                f"{attempt + 1}/{self.max_evolve_retries}..."
+            )
+            raw = llm_interaction(
+                self.client, self.model, system, user,
+                temperature=self.temperature, max_tokens=self.max_tokens,
+            )
+            code = extract_code(raw)
 
-        if code is None:
-            LOGGER.error("[ACGS_API] Initial code generation failed")
-            return None
+            if code is None:
+                LOGGER.warning(
+                    "[ACGS_API] Initial attempt %s: LLM returned no extractable code; "
+                    "raw_response_preview=%s",
+                    attempt + 1,
+                    _preview_response(raw),
+                )
+                continue
 
-        if not self.executor.load_topology_generator(code):
-            LOGGER.error("[ACGS_API] Initial code loading failed")
-            return None
+            if not self.load_generator_code(code):
+                LOGGER.warning(
+                    "[ACGS_API] Initial attempt %s: code loading failed; "
+                    "code_preview=%s",
+                    attempt + 1,
+                    _preview_response(code),
+                )
+                continue
 
-        self.topology_generator_code = code
-        LOGGER.info(f"[ACGS_API] Initial generator loaded ({len(code)} chars)")
-        return code
+            LOGGER.info(f"[ACGS_API] Initial generator loaded ({len(code)} chars)")
+            return code
+
+        LOGGER.error("[ACGS_API] Initial code generation failed after retries")
+        return None
 
     # ================================================================
     # Evolve
@@ -137,26 +173,39 @@ class ACGS_API:
         self,
         batch_stats: Dict[str, int],
         fv_result: Optional[Dict],
-        diagnosis: Optional[Dict],
         reason: str,
-        failure_replays_text: str,
-        success_replays_text: str,
         current_generator_code: Optional[str] = None,
         num_obstacles: int = 2,
-        history_records: Optional[List[Dict]] = None,
+        feedback_mode: str = "coarse",
+        attribution_result: Optional[Dict] = None,
+        coverage_summary: Optional[Dict] = None,
+        attribution_history: Optional[List[Dict]] = None,
+        cfa_result: Optional[Dict] = None,
+        graph_pattern_result: Optional[Dict] = None,
+        skill_signal_result: Optional[Dict] = None,
+        include_behavior: bool = True,
+        verifier_callback: Optional[Callable[[str, int], Any]] = None,
     ) -> Optional[str]:
         """
-        根据失败诊断生成新的障碍物生成器代码。含重试 + sanity check。
+        根据所选 feedback_mode 的结构化证据生成新的障碍物生成器代码。
+        含重试 + sanity check。
 
         Args:
             batch_stats: 粗粒度批次统计
-            fv_result: Level 1 failure vector 结果
-            diagnosis: Level 2 failure diagnosis 结果
-            reason: evolve 触发原因
-            failure_replays_text: 格式化的失败回放文本
-            success_replays_text: 格式化的成功回放文本
+            fv_result: aggregate failure vector 结果
+            reason: evolve 触发原因，仅用于日志和兼容
             current_generator_code: 当前生成器代码（None 时用 self.topology_generator_code）
             num_obstacles: 障碍物数量（sanity check 用）
+            feedback_mode: coarse | attribution | cfa | graph_pattern
+            attribution_result: obstacle z-space attribution map
+            coverage_summary: empirical generator coverage summary
+            attribution_history: recent attribution summaries
+            cfa_result: counterfactual attribution evidence
+            graph_pattern_result: failure-conditioned scene-graph pattern evidence
+            skill_signal_result: skill-library probe context for generator rewriting
+            verifier_callback: optional candidate verifier called after code
+                loading and sanity check. It receives (candidate_code, attempt_idx)
+                and should return an object/dict with accepted and feedback_text.
 
         Returns:
             新的代码字符串，全部重试失败返回 None
@@ -168,30 +217,46 @@ class ACGS_API:
         user = self.prompt_builder.build_evolve_user(
             batch_stats=batch_stats,
             fv_result=fv_result,
-            diagnosis=diagnosis,
             reason=reason,
-            failure_replays_text=failure_replays_text,
-            success_replays_text=success_replays_text,
             current_generator_code=current_generator_code,
-            history_records=history_records,
+            feedback_mode=feedback_mode,
+            attribution_result=attribution_result,
+            coverage_summary=coverage_summary,
+            attribution_history=attribution_history,
+            cfa_result=cfa_result,
+            graph_pattern_result=graph_pattern_result,
+            skill_signal_result=skill_signal_result,
+            include_behavior=include_behavior,
         )
 
         old_code = self.topology_generator_code
+        verifier_feedback = ""
 
         for attempt in range(self.max_evolve_retries):
             LOGGER.info(f"[ACGS_API] Evolve attempt {attempt + 1}/{self.max_evolve_retries}...")
+            attempt_user = user
+            if verifier_feedback:
+                attempt_user = (
+                    user
+                    + "\n\nAdditional audit feedback from the previous rejected candidate:\n"
+                    + verifier_feedback
+                )
 
             raw = llm_interaction(
-                self.client, self.model, system, user,
+                self.client, self.model, system, attempt_user,
                 temperature=self.temperature, max_tokens=self.max_tokens,
             )
             code = extract_code(raw)
 
             if code is None:
-                LOGGER.warning(f"[ACGS_API] Attempt {attempt + 1}: LLM returned no code")
+                LOGGER.warning(
+                    "[ACGS_API] Attempt %s: LLM returned no code; raw_response_preview=%s",
+                    attempt + 1,
+                    _preview_response(raw),
+                )
                 continue
 
-            if not self.executor.load_topology_generator(code):
+            if not self.load_generator_code(code):
                 LOGGER.warning(f"[ACGS_API] Attempt {attempt + 1}: code loading failed")
                 continue
 
@@ -203,11 +268,36 @@ class ACGS_API:
                 LOGGER.warning(f"[ACGS_API] Attempt {attempt + 1}: sanity check failed")
                 # 恢复旧生成器
                 if old_code:
-                    self.executor.load_topology_generator(old_code)
+                    self.load_generator_code(old_code)
                 continue
 
+            if verifier_callback is not None:
+                try:
+                    verifier_result = verifier_callback(code, attempt + 1)
+                    accepted = _verifier_accepted(verifier_result)
+                    verifier_feedback = _verifier_feedback(verifier_result)
+                except Exception as exc:
+                    LOGGER.warning(
+                        "[ACGS_API] Attempt %s: verifier callback failed: %s",
+                        attempt + 1,
+                        exc,
+                    )
+                    accepted = False
+                    verifier_feedback = (
+                        "Candidate rejected because the distribution audit failed "
+                        f"with an internal error: {exc}"
+                    )
+
+                if not accepted:
+                    LOGGER.warning(
+                        "[ACGS_API] Attempt %s: candidate rejected by verifier",
+                        attempt + 1,
+                    )
+                    if old_code:
+                        self.load_generator_code(old_code)
+                    continue
+
             # 全部通过
-            self.topology_generator_code = code
             LOGGER.info(f"[ACGS_API] Evolve succeeded (attempt {attempt + 1}), "
                          f"new generator loaded ({len(code)} chars)")
             return code
@@ -215,7 +305,7 @@ class ACGS_API:
         # 全部重试失败
         LOGGER.error(f"[ACGS_API] Evolve failed after {self.max_evolve_retries} attempts")
         if old_code:
-            self.executor.load_topology_generator(old_code)
+            self.load_generator_code(old_code)
         return None
 
     # ================================================================
@@ -236,6 +326,88 @@ class ACGS_API:
         return self.executor.generate(tblock_pose, num_obstacles)
 
     # ================================================================
+    # Best-of-R candidate sampling (Route B V0, plan 1A)
+    # ================================================================
+
+    def generate_candidates(
+        self,
+        batch_stats: Dict[str, int],
+        fv_result: Optional[Dict],
+        reason: str,
+        current_generator_code: Optional[str] = None,
+        num_obstacles: int = 2,
+        feedback_mode: str = "skill_library",
+        R: int = 3,
+        attribution_result: Optional[Dict] = None,
+        coverage_summary: Optional[Dict] = None,
+        attribution_history: Optional[List[Dict]] = None,
+        cfa_result: Optional[Dict] = None,
+        graph_pattern_result: Optional[Dict] = None,
+        skill_signal_result: Optional[Dict] = None,
+        include_behavior: bool = True,
+    ) -> List[str]:
+        """Sample up to R INDEPENDENT candidate generator codes from ONE evolve
+        prompt (Eurekaverse-style "R candidates per cycle").
+
+        Unlike ``evolve`` (per-attempt first-accept with feedback retries), this
+        does NOT accept or mutate the persistent generator: every candidate is
+        sanity-checked and collected, then the incumbent generator is restored.
+        The caller (Route B V0) scores all candidates with the W_probe verifier
+        and picks the best-of-R via ``decide_boundary_selection``.
+
+        Returns the list of sanity-passing candidate code strings (len may be < R).
+        """
+        if current_generator_code is None:
+            current_generator_code = self.topology_generator_code
+
+        system = self.prompt_builder.load_evolve_system()
+        user = self.prompt_builder.build_evolve_user(
+            batch_stats=batch_stats,
+            fv_result=fv_result,
+            reason=reason,
+            current_generator_code=current_generator_code,
+            feedback_mode=feedback_mode,
+            attribution_result=attribution_result,
+            coverage_summary=coverage_summary,
+            attribution_history=attribution_history,
+            cfa_result=cfa_result,
+            graph_pattern_result=graph_pattern_result,
+            skill_signal_result=skill_signal_result,
+            include_behavior=include_behavior,
+        )
+
+        old_code = self.topology_generator_code
+        candidates: List[str] = []
+        for i in range(int(R)):
+            LOGGER.info(f"[ACGS_API] Candidate sampling {i + 1}/{int(R)}...")
+            raw = llm_interaction(
+                self.client, self.model, system, user,
+                temperature=self.temperature, max_tokens=self.max_tokens,
+            )
+            code = extract_code(raw)
+            if code is None:
+                LOGGER.warning("[ACGS_API] Candidate %s: no extractable code", i + 1)
+                continue
+            if not self.load_generator_code(code):
+                LOGGER.warning("[ACGS_API] Candidate %s: code loading failed", i + 1)
+                continue
+            if not self.executor.sanity_check(
+                num_tests=self.sanity_check_count,
+                num_obstacles=num_obstacles,
+            ):
+                LOGGER.warning("[ACGS_API] Candidate %s: sanity check failed", i + 1)
+                continue
+            candidates.append(code)
+
+        # Restore the incumbent generator; acceptance is decided by the caller.
+        if old_code:
+            self.load_generator_code(old_code)
+        LOGGER.info(
+            f"[ACGS_API] generate_candidates: {len(candidates)}/{int(R)} sanity-passing"
+        )
+        return candidates
+
+    # ================================================================
     # 状态查询
     # ================================================================
 
@@ -248,12 +420,16 @@ class ACGS_API:
         self,
         batch_stats: Dict[str, int],
         fv_result: Optional[Dict],
-        diagnosis: Optional[Dict],
         reason: str,
-        failure_replays_text: str,
-        success_replays_text: str,
         current_generator_code: Optional[str] = None,
-        history_records: Optional[List[Dict]] = None,
+        feedback_mode: str = "coarse",
+        attribution_result: Optional[Dict] = None,
+        coverage_summary: Optional[Dict] = None,
+        attribution_history: Optional[List[Dict]] = None,
+        cfa_result: Optional[Dict] = None,
+        graph_pattern_result: Optional[Dict] = None,
+        skill_signal_result: Optional[Dict] = None,
+        include_behavior: bool = True,
     ) -> tuple:
         """
         返回 (system_prompt, user_prompt) 文本，用于日志记录。
@@ -263,11 +439,27 @@ class ACGS_API:
         user = self.prompt_builder.build_evolve_user(
             batch_stats=batch_stats,
             fv_result=fv_result,
-            diagnosis=diagnosis,
             reason=reason,
-            failure_replays_text=failure_replays_text,
-            success_replays_text=success_replays_text,
             current_generator_code=current_generator_code or self.topology_generator_code,
-            history_records=history_records,
+            feedback_mode=feedback_mode,
+            attribution_result=attribution_result,
+            coverage_summary=coverage_summary,
+            attribution_history=attribution_history,
+            cfa_result=cfa_result,
+            graph_pattern_result=graph_pattern_result,
+            skill_signal_result=skill_signal_result,
+            include_behavior=include_behavior,
         )
         return system, user
+
+
+def _verifier_accepted(result: Any) -> bool:
+    if isinstance(result, dict):
+        return bool(result.get("accepted", False))
+    return bool(getattr(result, "accepted", False))
+
+
+def _verifier_feedback(result: Any) -> str:
+    if isinstance(result, dict):
+        return str(result.get("feedback_text", ""))
+    return str(getattr(result, "feedback_text", ""))

@@ -29,8 +29,10 @@ env:
 # 课程学习配置（新增）
 curriculum:
   use_llm_obstacles: true  # 使用 LLM 生成障碍物
-  api_type: deepseek
-  model: deepseek-chat
+  api_type: openai
+  api_key: null  # 从环境变量 OPENAI_API_KEY 读取，避免硬编码到仓库
+  base_url: "https://ai.lv10.ren/v1"
+  model: gpt-5.4
   enable_acgs_loop: False  # 关闭 ACGS 循环，直接使用 LLM 生成的障碍物进行训练
 
 # 修改训练配置（只修改 num_epochs，其他保持不变）

@@ -45,36 +45,155 @@ NUM_SUBSTEPS: 25
 action_scale: 4
 device: "cuda:0"
 
+# ===== 技能库(路B / Skill-Library Curriculum)配置 =====
+# Route B V0(skill_library)必须 skill_enabled=true;V0 关多样性奖励(diversity_every=0)。
+skill:
+  skill_enabled: true       # 路B技能库(模式 B);skill_library 进化必须为 true
+  K: 4                      # probe 技能数 w_1..w_K;w_0 为部署技能
+  codebook_type: one_hot    # one_hot(d_w=K+1)
+  w0_rollout_ratio: 0.5     # P(w_0) >= 0.5(保护部署技能)
+  probe_rollout_ratio: 0.5
+  paired_sample_ratio: 0.3  # batch 中 diversity_paired 上限
+  lambda_cov_all: 0.0       # all-w coverage ablation(默认关)
+  diversity_every: 0        # V0 关多样性奖励(β_div 不生效)
+  diversity_num_layouts: 8
+  alpha: 1.0
+  beta: 1.0
+  gamma: 1.0
+  eta: 0.5
+  tau_q: 0.0
+  temperature: 0.5
+  margin: 1.0
+  rdiv_distribution: uniform
+  beta_div: 0.01
+  beta_div_min: 0.0001
+  beta_div_max: 0.1
+  task_warmup_steps: 0
+  success_floor: 0.5
+  eff_floor: null           # null -> 0.6*K
+  keff_cluster_threshold: 0.5
+  use_dual_critic: false
+
 # ===== LLM 障碍物生成 + ACGS 闭环配置 =====
 # 使用方式：
-#   Phase 0 测试（不启用 ACGS）: python train.py --config-name=exp_llm_curriculum curriculum.enable_acgs_loop=False
-#   ACGS 测试（启用 ACGS）:     python train.py --config-name=exp_llm_curriculum curriculum.enable_acgs_loop=True (默认)
+#   Phase 0 测试（不启用 ACGS）: python train.py --config-name=exp_llm_curriculum curriculum.evolve.enabled=False
+#   ACGS 测试（启用 ACGS）:     python train.py --config-name=exp_llm_curriculum curriculum.evolve.enabled=True (默认)
+# 说明：workspace 读取逻辑支持新旧兼容；旧平铺字段仍可用，但建议优先使用下面的分层结构。
 curriculum:
   use_llm: True
   use_llm_obstacles: True
-  api_type: "deepseek"
-  api_key: null  # 从环境变量 DEEPSEEK_API_KEY 读取
-  model: "deepseek-chat"
+  api_type: "openai"
+  api_key: ${oc.env:OPENAI_API_KEY,null}  # 从环境变量 OPENAI_API_KEY 读取，勿硬编码到仓库
+  base_url: "https://ai.lv10.ren/v1"
+  # base_url: "https://sub.ahyo.cc/v1"
+  model: "gpt-5.5"
+  task_name: "PushT"
   episodes_per_config: 1
   fix_tblock_with_obstacles: False
-  # ACGS 闭环配置
-  enable_acgs_loop: True            # 启用闭环（Phase 0 测试时设为 False）
-  evaluation_interval: 5000         # 每 N 个 episode 检查一次是否需要 evolve
-  frame_buffer_size: 5              # 失败回放保留最后 K 帧
-  max_failure_replays: 20           # 每批次最多存储的失败回放数
-  max_success_replays: 5            # 每批次最多存储的成功回放数
-  # 条件触发参数
-  warmup_success_threshold: 0.15    # warmup 退出条件：成功率首次 >= 此值
-  warmup_min_episodes: 5000         # warmup 最少 episode 数（即使成功率达标也要跑够）
-  first_evolve_episode: 5000        # 第一次 evolve 固定触发点（达到该 episode 后首个批次触发）
-  warmup_max_episodes: 20000        # warmup 最大 episode 数（超时后强制触发 evolve）
-  warmup_failure_threshold: 0.05    # warmup 失败检测：成功率 < 此值视为失败
-  success_rate_impossible: 0.05     # 不可能完成检测：成功率 < 此值触发 "impossible" evolve
-  success_rate_high: 0.75           # 成功率 > 此值 → 环境太简单，触发 evolve
-  success_rate_low: 0.30            # 成功率 < 此值 → 环境太难，触发 evolve
-  plateau_threshold: 0.03           # 连续 K 个批次成功率变化 < 此值 → 瓶颈
-  plateau_window: 3                 # 瓶颈检测窗口（检查最近 K 个批次）
-  evolve_cooldown: 10000            # evolve 后冷却期（等待 N 个 episode 再检查）
+
+  generator:
+    init_mode: llm                  # llm | file（当前实现会优先看 init_path，未设置则默认 llm）
+    init_path: null                 # 若指定，则跳过 Stage A 采样，直接加载该初始 generator 文件
+    save_artifacts: True            # 将 initial/current/evolved generator 代码落盘到输出目录
+
+  evolve:
+    enabled: True                   # 启用闭环（Phase 0 测试时设为 False）
+    feedback_mode: skill_library    # Route B V0 主线(W_probe boundary + 单标量治锁 best-of-R)
+    trigger_mode: fixed             # fixed：按 episode schedule 触发；success rate 只作为 prompt 难度信号
+    first_episode: 5000             # 第一次 evolve 固定触发点(与 4.29 单策略基线一致)
+    evaluation_interval: 5000       # 后续每 5000 episode 固定触发一次 evolve
+    max_evolve_count: 30            # evolve 在 5k/10k/.../150k episode(覆盖训练前中段)
+    difficulty_success_high: 0.80   # prompt 难度信号：高于此值提示 LLM 加难但保持可解
+    difficulty_success_low: 0.20    # prompt 难度信号：低于此值提示 LLM 降难/减少阻塞
+    # ---- Route B V0 单标量治锁 verifier 阈值(verifier 与 prompt 方向共用)----
+    skill_library:
+      candidates_per_cycle: 3       # best-of-R:每周期 LLM 采 3 个候选,argmax 选 1
+      valid_rate_min: 0.8           # 绝对硬门:物理有效率
+      duplicate_rate_max: 0.25      # 绝对硬门:布局重复率上限
+      min_boundary_count_delta: 4   # 未饱和时净改进阈值(boundary_count)
+      r_easy_max: 0.8               # 饱和逃逸(全易→HARDEN)
+      r_hard_max: 0.8               # 饱和逃逸(全难→RELAX)
+      tau_saturation: 0.125         # boundary 带 τ<p<1−τ(K=4)
+      target_delta: 0.15            # 近 0.5 判定(仅诊断)
+      exclude_invalid_from_boundary: true   # Edit-1 已开启:把无效场景(固定起点摆不出合法布局)从 boundary 统计剔除,只计入 valid_rate,避免"生成器无效"被当成"库解不开"(修 r_hard 虚高/误 RELAX/mean_b 稀释)
+      # PRESERVE_AND_DIVERSIFY 换代(点2/点3,默认关=旧 hold 行为):
+      # would-be hold(未饱和、无 boundary 净改进)时,不冻住 G_t,而是换一个
+      # 等难度(bc>=cur-tolerance、r_easy 不更高)的新结构候选,让训练分布持续多样化而不变易。
+      diversify_on_hold: false          # 点2 总开关
+      diversify_bc_tolerance: 2         # 等难度容差(boundary_count 不低于 cur-此值)
+      diversify_prefer_lower_easy: false # 点3:r_easy 偏高时,等难度里偏好更低 r_easy(温和回拉)
+      diversify_r_easy_soft: 0.5        # 点3 仅当 cur r_easy > 此软阈值才生效
+      diversify_easy_eps: 0.05          # r_easy 护栏容差(候选 r_easy <= cur + 此值)
+    skill_signal:
+      probe_M: 40                   # Phase 3 context probe: sampled scenes per evolve round
+      probe_K: 12                   # Phase 3 context probe: injected latent skills per scene
+      context_n: 4                  # focus / harden / avoid examples rendered into the prompt
+      include_behavior: True        # include downsampled success/failure routes in prompt evidence
+      route_waypoints: 5
+    candidate_verifier:
+      enabled: True                 # skill_signal mode: verify candidate generators by paired rollout probe
+      use_verifier: True            # False = accept LLM candidate directly (Phase 5 ablation)
+      probe_M: 30                   # verifier probe scenes; paired current-vs-candidate
+      probe_K: 8                    # verifier injected latent skills per scene
+      probe_n: 0                    # verifier only needs profile/lv, not prompt examples
+      validity_num_pose_samples: 30 # cheap validity gate before rollout probe
+      infeasible_cap: 0.30
+      min_score_delta: 0.0
+      min_valid_generation_rate: 0.95
+      timeout_sec: 5
+      save_audits: True
+    phase4_monitor:
+      enabled: False                # V0(skill_library)关闭:其 random-z 探针对 skill_enabled 策略无效
+      paired_shift:
+        enabled: True               # old vs new generator on same starts/z, isolates generator effect
+        M: 40
+        K: 12
+        n: 0
+        seed_offset: 2000
+      fresh_validation:
+        enabled: True               # fresh starts/z, checks whether accepted shift generalizes
+        M: 40
+        K: 12
+        n: 0
+        seed_offset: 3000
+      bin_coverage:
+        enabled: True               # warning-only collapse monitor
+        grid: 8
+      repair:
+        semantic_feedback: False
+        allow_size_escalation: False
+        allow_num_escalation: False
+        diversity_gate: False
+        archive_replay: False
+
+  graph_pattern:
+    num_bins: 4                     # data-adaptive quantile bins for raw scene-graph layout features
+    max_conditions: 3               # max conjunction length for discovered graph patterns
+    min_support: 100                # minimum episodes covered by a pattern
+    min_failure_count: 20           # minimum failed episodes covered by a pattern
+    top_k: 8                        # top patterns rendered into prompt and saved in summaries
+    beam_width: 250                 # search width for multi-condition pattern mining
+    max_overlap: 0.90               # redundancy pruning threshold between selected patterns
+    min_lift: 1.0                   # keep patterns whose failure rate is at least global failure rate
+
+  attribution:
+    min_support: 10                 # z-space cell 至少多少 obstacle samples 才进入 top attribution
+    top_k: 5                        # prompt/日志中保留的 top failure-associated cells 数
+    low_k: 3                        # prompt/日志中保留的 low-lift learnable cells 数
+    beta_center_eps: 1.0e-6
+    include_failure_key_lifts: True # 仅数据层保留；prompt 不渲染 9 类 Type-1 标签
+    candidate_verifier:
+      enabled: True                 # attribution mode: reject candidates whose sampled distribution does not improve evidence score
+      num_pose_samples: 500         # offline tblock poses used for current-vs-candidate score comparison
+      seed: 42
+      timeout_sec: 5
+      min_valid_generation_rate: 0.95
+      save_audits: True
+
+  branch:
+    save_pre_evolve_checkpoint: False  # 在首次 evolve 前保存分叉 checkpoint（用于 static/evolve 机制实验）
+    pre_evolve_checkpoint_tag: "pre_first_evolve"
+    resume_checkpoint: null
 
 # ===== 训练环境: LLM 版本 (尺寸与 baseline 一致) =====
 env:
@@ -121,6 +240,10 @@ unseen_env:
 
 policy:
   _target_: ldpi
+  # 技能库(路B):skill_enabled=false 时退化严格 DIVO;true 时 decoder 输入自动加宽 d_w
+  skill_enabled: ${skill.skill_enabled}
+  K: ${skill.K}
+  codebook_type: ${skill.codebook_type}
   encoder_net:
     _target_: fc_vec
     in_chan: ${obs_dim}
@@ -139,6 +262,10 @@ policy:
 critic:
   _target_: mcritic
   n_critics: 2
+  # 技能库(路B):critic 变为 w-条件 Q(obs, w, a)
+  skill_enabled: ${skill.skill_enabled}
+  K: ${skill.K}
+  codebook_type: ${skill.codebook_type}
   net0:
     _target_: fc_vec
     in_chan: ${obsaction_dim}
@@ -196,6 +323,7 @@ training:
   num_epochs: 1000000
   device: ${device}
   seed: 42
+  resume_checkpoint: ${curriculum.branch.resume_checkpoint}
   checkpoint_every: 10000
   validate: true
   validate_steps: 5000

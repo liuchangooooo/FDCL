@@ -1,28 +1,36 @@
 defaults:
   - _self_
-  - override hydra/hydra_logging: disabled  
+  - override hydra/hydra_logging: disabled
   - override hydra/job_logging: disabled
+
 _target_: evaluation.Evaluator
 
 name: eval
 task_name: evaluation
-exp_name: run1
+exp_name: final_policy_only
+
+# `policy_only`: 只加载 policy checkpoint，直接 rollout
+# `full_adaptation`: 保留原版 DIVO 的 sampler + motion decoder 测试路径
+mode: policy_only
 
 device: "cuda:0"
 max_steps: 10
-num_episodes: 10
-num_render: 10
+num_episodes: 20
+num_render: 3
+reward: last
 seed: 0
 
-output_dir: data/outputs/2025.12.18/21.36.11_td3_pusht_mujuco_obstacle/evaluation
+output_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_final_evaluation
 
+# 作为 benchmark suite 的基准 env 配置。
+# 每个 benchmark 会在此基础上覆写 obstacle family。
 env:
   _target_: pusht_mujoco
   obstacle: True
-  obstacle_num: 3
-  obstacle_size: 0.03 #default 0.03 big 0.05 unstructured 0.08
-  obstacle_shape: box #box, sphere, unstructured
-  obstacle_dist: random #random, aroundT, between, random_step
+  obstacle_num: 1
+  obstacle_size: 0.03
+  obstacle_shape: box
+  obstacle_dist: random
   action_scale: 4
   NUM_SUBSTEPS: 5
   action_dim: [6, ]
@@ -31,19 +39,55 @@ env:
   reg_coeff: 1.0
   generate_dataset: False
   motion_pred: False
-  eval : True
-  dynamics_randomization : False
+  eval: True
+  dynamics_randomization: False
 
+# Final benchmark suite aligned to original DIVO Push-T families.
+# 注意：如果 policy 的输入槽位少于 benchmark 的障碍物数量，
+# policy-only evaluator 会截断多出的 trailing obstacle features。
+benchmarks:
+  enabled: True
+  order: [B, M, U, D]
+
+  B:
+    env_overrides:
+      obstacle_num: 1
+      obstacle_size: 0.05
+      obstacle_shape: box
+      obstacle_dist: random
+
+  M:
+    env_overrides:
+      obstacle_num: 3
+      obstacle_size: 0.03
+      obstacle_shape: box
+      obstacle_dist: random
+
+  U:
+    env_overrides:
+      obstacle_num: 1
+      obstacle_size: 0.08
+      obstacle_shape: unstructured
+      obstacle_dist: random
+
+  D:
+    env_overrides:
+      obstacle_num: 3
+      obstacle_size: 0.03
+      obstacle_shape: box
+      obstacle_dist: random_step
+
+# 仅在 mode=full_adaptation 时使用，保留原版兼容路径
 sampler:
-  checkpoint: data/outputs/2025.12.18/21.36.11_td3_pusht_mujuco_obstacle/sampler/2025.12.19.11.08.25_FlowSampler/flowmodel_epoch=190_valloss=0.7819.pt
+  checkpoint: None
 
 motion_decoder:
-  checkpoint: data/outputs/2025.12.18/21.36.11_td3_pusht_mujuco_obstacle/motion_decoder/2025.12.19.20.33.01_TCNMotionDecoder/tcn_epoch=250_valloss=0.0007.pt
-  
+  checkpoint: None
+
 policy:
   checkpoint: data/outputs/2025.12.18/21.36.11_td3_pusht_mujuco_obstacle/checkpoints/model_latest.pt
 
-hydra:  
-  output_subdir: null  
-  run:  
+hydra:
+  output_subdir: null
+  run:
     dir: .

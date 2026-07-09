@@ -32,6 +32,21 @@ class BaseWorkspace:
         """
         pass
 
+    def get_extra_state(self):
+        """
+        Return additional serializable state that should travel with checkpoints.
+        Subclasses can override this to store runtime metadata that is not covered
+        by module/optimizer state_dicts.
+        """
+        return {}
+
+    def load_extra_state(self, extra_state):
+        """
+        Restore additional state emitted by get_extra_state().
+        Subclasses can override this to rehydrate runtime metadata.
+        """
+        return None
+
     def save_checkpoint(self, path=None, tag='latest', 
             exclude_keys=None,
             include_keys=None,
@@ -49,7 +64,8 @@ class BaseWorkspace:
         payload = {
             'cfg': self.cfg,
             'state_dicts': dict(),
-            'pickles': dict()
+            'pickles': dict(),
+            'extra_state': self.get_extra_state(),
         } 
 
         for key, value in self.__dict__.items():
@@ -85,6 +101,8 @@ class BaseWorkspace:
         for key in include_keys:
             if key in payload['pickles']:
                 self.__dict__[key] = dill.loads(payload['pickles'][key])
+        if 'extra_state' in payload:
+            self.load_extra_state(payload['extra_state'])
     
     def load_checkpoint(self, path=None, tag='latest',
             exclude_keys=None, 

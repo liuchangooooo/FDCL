@@ -20,29 +20,111 @@ NUM_SUBSTEPS: 25 #2s/NUM_SUBSTEPS = control time
 action_scale: 4 #limit action around T block
 device: "cuda:0"
 
-# ===== 课程学习 + ACGS 闭环配置 =====
+# ===== 技能库(路B / Skill-Library Curriculum)配置 =====
+# 默认全部关闭:skill_enabled=false 时退化为严格 DIVO(模式 A),训练/部署与旧版一致。
+skill:
+  skill_enabled: true       # 路B技能库(模式 B);Stage 2 skill_library 必须为 true
+  K: 4                      # probe 技能数(w_1..w_K);w_0 为部署技能
+  codebook_type: one_hot    # one_hot(d_w=K+1)| random
+  # 采集与采样(Task 6/4)
+  w0_rollout_ratio: 0.5     # P(w_0) >= 0.5(保护部署技能)
+  probe_rollout_ratio: 0.5
+  paired_sample_ratio: 0.3  # batch 中 diversity_paired 上限
+  # actor / coverage(Task 7)
+  lambda_cov_all: 0.0       # all-w coverage ablation(默认关)
+  # 多样性 Form B(Task 9)
+  diversity_every: 0        # >0 才周期跑 paired diversity(默认关)
+  diversity_num_layouts: 8
+  alpha: 1.0                # soft-gate: q=α·success+β·progress-γ·collision-η·timeout
+  beta: 1.0
+  gamma: 1.0
+  eta: 0.5
+  tau_q: 0.0
+  temperature: 0.5
+  margin: 1.0               # Form B margin 有界
+  rdiv_distribution: uniform  # uniform | terminal | discount
+  # β_div 调度(Task 10)
+  beta_div: 0.01
+  beta_div_min: 0.0001
+  beta_div_max: 0.1
+  task_warmup_steps: 0      # warm-up 期内 β_div=0
+  success_floor: 0.5
+  eff_floor: null           # null -> 0.6*K
+  # K_eff 协议(Task 11)
+  keff_cluster_threshold: 0.5
+  # dual critic 后备(Task 9.5,未实现,保持 false)
+  use_dual_critic: false
+
+# ===== 课程学习 + ACGS 闭环配置(Route B V0 / skill_library)=====
 curriculum:
   use_llm: True
-  use_llm_obstacles: True
+  use_llm_obstacles: True          # Stage 0:训练启动时 LLM 现场生成 G_0
   use_adaptive: True
-  api_type: "deepseek"
-  api_key: null  # 从环境变量 DEEPSEEK_API_KEY 读取
-  model: "deepseek-chat"
-  # ACGS 闭环
+  api_type: "openai"
+  api_key: null                    # 从环境变量 OPENAI_API_KEY 读取
+  base_url: "https://ai.lv10.ren/v1"
+  model: "gpt-5.4"
+
+  # ---- ACGS 进化闭环 ----
   enable_acgs_loop: True
-  evaluation_interval: 100
+  feedback_mode: skill_library     # Route B V0 主线(W_probe boundary + 单标量治锁)
+  trigger_mode: fixed              # 固定 episode 间隔触发(唯一支持)
+  evaluation_interval: 5000        # 每 5000 episode 进化一次(与 4.29 单策略基线一致)
+  first_evolve_episode: 5000       # 首次进化的 episode
+  max_evolve_count: 30             # 最多进化 30 次(evolve 在 5k/10k/.../150k episode)
+  # G_0 不写死:默认 LLM 现场生成(init_mode=llm)。四格公平对比时用 CLI 覆盖:
+  #   curriculum.generator.init_mode=file curriculum.generator.init_path=<共享 G_0 路径>
   frame_buffer_size: 5
   max_failure_replays: 20
   max_success_replays: 5
+
+  # ---- 候选生成 sandbox 校验 ----
+  evolve:
+    candidate_verifier:
+      enabled: true
+      timeout_sec: 5
+      min_valid_generation_rate: 0.95   # sandbox 生成成功率(与 V0 硬门 valid_rate_min 不同)
+      save_audits: true
+
+  # ---- W_probe 上下文探针(喂 LLM prompt 的 boundary 信号)----
+  skill_signal:
+    probe_M: 32          # 上下文探针场景数(w_probe 下 K 取 policy.K,probe_K 忽略)
+    probe_K: 4
+    context_n: 4         # prompt 里 focus/avoid 例子数
+    include_behavior: true
+    route_waypoints: 5
+
+  # ---- W_probe 候选验证探针(给每个候选打 boundary_count)----
+  skill_verifier:
+    use_verifier: true
+    probe_M: 32          # 每个候选评估的布局数(= eval_layouts_M;跑通期减半,正式可 64)
+    probe_K: 4           # w_probe 下忽略(K=policy.K)
+    probe_n: 0
+    validity_num_pose_samples: 32
+
+  # ---- Route B V0 单标量治锁 verifier 阈值(verifier 与 prompt 方向共用)----
+  skill_library:
+    candidates_per_cycle: 3         # best-of-R:每周期 LLM 采 3 个候选
+    valid_rate_min: 0.8             # 绝对硬门:物理有效率
+    duplicate_rate_max: 0.25        # 绝对硬门:布局重复率上限
+    min_boundary_count_delta: 4     # 未饱和时净改进阈值(boundary_count)
+    r_easy_max: 0.8                 # 饱和逃逸(全易→HARDEN)
+    r_hard_max: 0.8                 # 饱和逃逸(全难→RELAX)
+    tau_saturation: 0.125           # boundary 带 τ<p<1−τ(K=4)
+    target_delta: 0.15              # 近 0.5 判定(仅诊断)
+
+  # ---- V0 关闭 phase4 monitor(其 random-z 探针对 skill_enabled 策略无效)----
+  phase4_monitor:
+    enabled: false
 
 # ===== 使用 LLM 版本的环境 =====
 env:
   _target_: pusht_mujoco_llm  # 使用 LLM 版本
   obstacle: True
   obstacle_num: 2
-  obstacle_size: 0.05
+  obstacle_size: 0.01        # 默认 0.01(零样本泛化;与 4.29 训练 env 对齐)
   obstacle_shape: box
-  obstacle_dist: random
+  obstacle_dist: between
   action_scale: ${action_scale}
   NUM_SUBSTEPS: ${NUM_SUBSTEPS}
   action_dim: [6, ]
@@ -77,6 +159,11 @@ unseen_env:
 
 policy:
   _target_: ldpi
+  # Skill library (Route B). skill_enabled=false -> strict DIVO (mode A);
+  # decoder input is widened by d_w automatically when enabled.
+  skill_enabled: ${skill.skill_enabled}
+  K: ${skill.K}
+  codebook_type: ${skill.codebook_type}
   encoder_net:
     _target_: fc_vec
     in_chan: ${obs_dim}
@@ -95,6 +182,10 @@ policy:
 critic:
   _target_: mcritic
   n_critics: 2
+  # Skill library: critic becomes w-conditioned Q(obs, w, a) when enabled.
+  skill_enabled: ${skill.skill_enabled}
+  K: ${skill.K}
+  codebook_type: ${skill.codebook_type}
   net0: 
     _target_: fc_vec
     in_chan: ${obsaction_dim}

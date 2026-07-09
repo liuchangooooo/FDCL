@@ -305,23 +305,27 @@ class PushTaskLLM(composer.Task):
         # 优先级2：评估模式下的固定起点
         if self.eval and self.eval_pose is not None:
             return np.array(self.eval_pose)
-        
+
+        return self.sample_valid_tblock_pose(target_block_pose)
+
+    def sample_valid_tblock_pose(self, target_block_pose):
+        """纯采样接口：返回满足基础任务约束的合法 T-block 起点。"""
         max_attempts = 1000
         for _ in range(max_attempts):
             tblock_pose = np.array(
                 np.random.uniform(-0.18, 0.18, 2).tolist() + [np.random.uniform(0, 2*np.pi)]
             )
-            
+
             # 约束1: 不能在中心区域（太靠近目标）
             if abs(tblock_pose[0]) < 0.1 and abs(tblock_pose[1]) < 0.1:
                 continue
-            
+
             # 约束2: 初始奖励要足够低（任务要有意义）
             if self.calc_reward(tblock_pose, target_block_pose) > -3.0:
                 continue
-            
+
             return tblock_pose
-        
+
         # 找不到则使用默认位置
         return np.array([0.15, 0.15, 3*np.pi/4])
 
@@ -796,12 +800,50 @@ class PushT_mj_rod_LLM(composer.Environment):
         """清除 LLM 配置，恢复随机生成模式"""
         self.task.llm_obstacle_config = None
 
+    def sample_valid_tblock_pose(self):
+        """公开接口：直接采样一个合法起点，不依赖额外 reset。"""
+        target_block_pose = np.array(self.task._target_block_pos, dtype=np.float64)
+        return self.task.sample_valid_tblock_pose(target_block_pose)
+
+    def is_obstacle_config_valid(self, config_list, tblock_pose):
+        """检查 LLM 生成的障碍物配置是否与起点/目标兼容。"""
+        target_block_pose = np.array(self.task._target_block_pos, dtype=np.float64)
+        for cfg in config_list:
+            obs_x = float(cfg['x'])
+            obs_y = float(cfg['y'])
+
+            if not (-0.2 <= obs_x <= 0.2 and -0.2 <= obs_y <= 0.2):
+                return False
+
+            if analytic_obs_collision_check(
+                Tblock_angle=tblock_pose[-1],
+                obs_center=np.array([obs_x, obs_y]) - tblock_pose[:2],
+                obs_size=self.task._obstacle_size * 2,
+                threshold=0.04 * 2,
+            ):
+                return False
+
+            if analytic_obs_collision_check(
+                Tblock_angle=target_block_pose[-1],
+                obs_center=np.array([obs_x, obs_y]) - target_block_pose[:2],
+                obs_size=self.task._obstacle_size * 2,
+                threshold=0.04 * 2,
+            ):
+                return False
+
+        return True
+
     def get_obstacle_positions(self):
         """获取当前障碍物位置"""
         positions = []
         for i in range(self.task.obstacle_num):
             pos, _ = self.task._obstacle[i].get_pose(self.physics)
-            positions.append({'x': pos[0], 'y': pos[1], 'z': pos[2]})
+            item = {'x': pos[0], 'y': pos[1], 'z': pos[2]}
+            if self.task.llm_obstacle_config is not None and i < len(self.task.llm_obstacle_config):
+                purpose = self.task.llm_obstacle_config[i].get('purpose')
+                if purpose is not None:
+                    item['purpose'] = str(purpose)
+            positions.append(item)
         return positions
         
     def control_pt2traj(self, action, obs):

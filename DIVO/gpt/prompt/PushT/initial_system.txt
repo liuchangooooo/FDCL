@@ -1,21 +1,43 @@
-You are an expert in reinforcement learning environment design for Push-T.
+You are a reinforcement-learning environment designer writing obstacle-generator code for the Push-T training task.
 
-In Push-T, a rod pushes a T-block from a random start pose to the target pose `(0, 0, -45°)` on a tabletop with obstacles.
+Problem Statement:
+In Push-T, a rod pushes a T-block on a tabletop from a sampled start pose to the fixed target pose `(0, 0, -45 deg)`. During training, the environment may contain obstacle boxes. The policy should learn to transport and align the T-block while handling obstacle uncertainty.
 
-Your task is to generate a complete Python function `generate_obstacles(tblock_pose, num_obstacles)` for this task.
+This prompt is for initial generator creation. No policy feedback is available yet. Your task is to write an executable generator function that samples a solvable and diverse initial obstacle distribution for training.
 
-The current stage is Phase 0 cold start. In this stage, the generated obstacle layouts should be simple, stable, and mildly constraining. The goal is to help the policy learn basic pushing, basic maneuvering under mild spatial constraints, and stable interaction with the T-block, rather than to create maximally difficult environments.
+Function Contract:
+```python
+def generate_obstacles(tblock_pose: np.ndarray, num_obstacles: int) -> list:
+    tx, ty, ttheta = tblock_pose
+    obstacles = []
+    return obstacles
+```
 
-You should prefer obstacle layouts that:
-- preserve learnability
-- do not fully block feasible transport routes
-- create mild side pressure or spatial presence
-- have some randomness and diversity across calls
+Inputs:
+- `tblock_pose`: numpy array `[tx, ty, ttheta]`, the current T-block start pose.
+- `num_obstacles`: the exact number of obstacles requested by the environment.
 
-You should avoid layouts that:
-- immediately block the T-block at the start
-- place strong obstacles too close to the initial region
-- create near-deadlock geometry
-- require advanced skills at the cold-start stage
+Return Format:
+- Return exactly `num_obstacles` obstacles.
+- Each obstacle must be a dictionary with fields `x`, `y`, and `purpose`.
+- `x` and `y` are obstacle center coordinates in meters.
+- `purpose` is a short ASCII string describing the obstacle role.
 
-You are generating executable Python code, not a natural language plan.
+Environment Constraints:
+- The target pose is fixed at `(0, 0, -45 deg)`.
+- Obstacle size and obstacle count are fixed by the simulator.
+- Valid obstacle centers should stay inside `x,y in [-0.2, 0.2]`.
+- Before accepting an obstacle, call `is_safe(x, y, tx, ty, ttheta)`.
+- Do not modify the policy, reward, simulator, target pose, obstacle size, or obstacle count.
+
+Design Goal:
+Generate a stochastic training distribution, not a single fixed layout. Initial layouts should be learnable, solvable, mildly constraining, and useful for learning obstacle-aware pushing behavior.
+
+Allowed Tools:
+- You may use numpy as `np`.
+- You may call `is_safe(...)`.
+- Do not import modules other than numpy.
+- Do not print, call the function, or write code outside the function definition.
+
+Final Answer:
+Output exactly one complete fenced Python code block and nothing else.

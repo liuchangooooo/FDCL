@@ -72,10 +72,49 @@ def ccw(A,B,C):
 def intersect(A,B,C,D):
     return ((ccw(A,C,D) != ccw(B,C,D)) * (ccw(A,B,C) != ccw(A,B,D))).sum()
 
+# Source-tag encoding for skill rollouts (Task 3 / Requirement 4.9).
+SOURCE_NORMAL = 0
+SOURCE_DIVERSITY_PAIRED = 1
+_SOURCE_STR_TO_INT = {"normal": SOURCE_NORMAL, "diversity_paired": SOURCE_DIVERSITY_PAIRED}
+
+
+def _encode_source(source):
+    if source is None:
+        return SOURCE_NORMAL
+    if isinstance(source, str):
+        try:
+            return _SOURCE_STR_TO_INT[source]
+        except KeyError:
+            raise ValueError(f"Unknown replay source tag: {source}")
+    return int(source)
+
+
+def reward_for_critic(skill_id, reward_task, reward_total, deploy_skill_id=0):
+    """Route the critic training reward by skill (Task 4 / Requirement 4.6).
+
+    Deployment skill ``w_0`` (``skill_id == deploy_skill_id``) is trained on the
+    pure task reward so ``Q(obs, w_0, .)`` stays a clean task value; probe skills
+    use ``reward_total = reward_task + beta_div * reward_div``.
+
+    Accepts numpy arrays (shape ``[B, 1]`` or ``[B]``) or torch tensors and
+    returns the same type/shape.
+    """
+    if isinstance(skill_id, torch.Tensor):
+        mask = (skill_id == int(deploy_skill_id))
+        return torch.where(mask, reward_task, reward_total)
+    skill_id = np.asarray(skill_id)
+    return np.where(skill_id == int(deploy_skill_id), np.asarray(reward_task), np.asarray(reward_total))
+
+
 class StateDictReplayBuffer:
-    def __init__(self, size, obs_dim, action_dim, z_dim=None, full_obs=None, obs_entry_info=None):
+    def __init__(self, size, obs_dim, action_dim, z_dim=None, full_obs=None,
+                 obs_entry_info=None, track_skill=False):
         self.z = False
         self.full_obs = False
+        # Skill bookkeeping (Task 3): per-transition skill_id, source tag, and the
+        # three reward columns (task / div / total). Off by default so strict-DIVO
+        # training and existing callers are unchanged.
+        self.track_skill = bool(track_skill)
         if obs_entry_info == None:
             self.obs_dict = False
             self.obs_buf = np.zeros((size, *obs_dim), dtype=np.float32)
@@ -98,9 +137,17 @@ class StateDictReplayBuffer:
         if full_obs != None:
             self.full_obs_buf = np.zeros((size,*full_obs), dtype=np.float32)
             self.full_obs = True
+        if self.track_skill:
+            self.skill_id_buf = np.zeros((size, 1), dtype=np.int64)
+            self.source_buf = np.zeros((size, 1), dtype=np.int64)
+            self.reward_task_buf = np.zeros((size, 1), dtype=np.float32)
+            self.reward_div_buf = np.zeros((size, 1), dtype=np.float32)
+            self.reward_total_buf = np.zeros((size, 1), dtype=np.float32)
         self.ptr, self.size, self.max_size = 0, 0, size
 
-    def add(self, obs, next_obs, act, rew, done, z=None, full_obs=None):
+    def add(self, obs, next_obs, act, rew, done, z=None, full_obs=None,
+            skill_id=None, source=None, reward_task=None, reward_div=None,
+            reward_total=None):
         if ((not self.z) and isinstance(z,(np.ndarray, np.generic))) or (self.z and (not isinstance(z,(np.ndarray, np.generic)))):
             raise ValueError('Replaybuffer latent error')
 
@@ -124,12 +171,27 @@ class StateDictReplayBuffer:
         if self.full_obs:
             self.full_obs_buf[self.ptr:self.ptr+1] = full_obs
 
+        if self.track_skill:
+            # skill_id defaults to 0 (deployment skill w_0).
+            self.skill_id_buf[self.ptr] = 0 if skill_id is None else int(skill_id)
+            self.source_buf[self.ptr] = _encode_source(source)
+            # reward_task defaults to the plain reward; reward_div defaults to 0;
+            # reward_total defaults to reward_task + reward_div. w_0 transitions
+            # carry reward_div=0 so reward_total == reward_task (design 组件 4).
+            r_task = float(rew) if reward_task is None else float(reward_task)
+            r_div = 0.0 if reward_div is None else float(reward_div)
+            r_total = (r_task + r_div) if reward_total is None else float(reward_total)
+            self.reward_task_buf[self.ptr] = r_task
+            self.reward_div_buf[self.ptr] = r_div
+            self.reward_total_buf[self.ptr] = r_total
+
         self.ptr = (self.ptr + 1) % self.max_size
         self.size = min(self.size + 1, self.max_size)
 
-    def sample(self, batch_size=32):
-        idxs = np.random.randint(0, self.size, size=batch_size)
-        
+    def sample(self, batch_size=32, idxs=None):
+        if idxs is None:
+            idxs = np.random.randint(0, self.size, size=batch_size)
+
         if not self.obs_dict:
             observations = self.obs_buf[idxs]
             next_observations = self.next_obs_buf[idxs]
@@ -137,36 +199,153 @@ class StateDictReplayBuffer:
             observations = {k: self.obs_buf[k][idxs] for k in self.obs_buf.keys()}
             next_observations = {k: self.next_obs_buf[k][idxs] for k in self.next_obs_buf.keys()}
 
+        # Base transition fields; optional channels are appended so z / full_obs /
+        # skill can coexist (old single-flag callers see identical keys).
+        batch = AttrDict(observations=observations,
+                         next_observations=next_observations,
+                         actions=self.act_buf[idxs],
+                         rewards=self.rew_buf[idxs],
+                         dones=self.done_buf[idxs])
         if self.z:
-            batch = AttrDict(observations=observations,
-                            next_observations=next_observations,
-                            actions=self.act_buf[idxs],
-                            rewards=self.rew_buf[idxs],
-                            dones=self.done_buf[idxs],
-                            z=self.z_buf[idxs])
-        elif self.full_obs:
-            batch = AttrDict(observations=observations,
-                            next_observations=next_observations,
-                            actions=self.act_buf[idxs],
-                            rewards=self.rew_buf[idxs],
-                            dones=self.done_buf[idxs],
-                            full_obs=self.full_obs_buf[idxs])
-        elif self.z and self.full_obs:
-            batch = AttrDict(observations=observations,
-                            next_observations=next_observations,
-                            actions=self.act_buf[idxs],
-                            rewards=self.rew_buf[idxs],
-                            dones=self.done_buf[idxs],
-                            z=self.z_buf[idxs],
-                            full_obs=self.full_obs_buf[idxs])
-        else:
-            batch = AttrDict(observations=observations,
-                            next_observations=next_observations,
-                            actions=self.act_buf[idxs],
-                            rewards=self.rew_buf[idxs],
-                            dones=self.done_buf[idxs])
+            batch['z'] = self.z_buf[idxs]
+        if self.full_obs:
+            batch['full_obs'] = self.full_obs_buf[idxs]
+        if self.track_skill:
+            batch['idxs'] = idxs
+            batch['skill_id'] = self.skill_id_buf[idxs]
+            batch['source'] = self.source_buf[idxs]
+            batch['reward_task'] = self.reward_task_buf[idxs]
+            batch['reward_div'] = self.reward_div_buf[idxs]
+            batch['reward_total'] = self.reward_total_buf[idxs]
 
         return batch
+
+    def sample_stratified(self, batch_size=32, w0_min_ratio=0.5,
+                          paired_sample_ratio=0.3, rng=None):
+        """Source-stratified sampling (Task 4 / Requirements 4.2, 4.3).
+
+        Controls the *final batch* composition (not just the rollout mix):
+          - ``P(w_0) >= w0_min_ratio``  (protect the deployment skill),
+          - ``P(diversity_paired) <= paired_sample_ratio``  (avoid paired data
+            dominating the training distribution).
+        Falls back to plain ``sample`` when skill tracking is off. Pools are
+        drawn with replacement (matching the base buffer) and degrade gracefully
+        when a pool is empty (e.g. early training with only w_0).
+        Returns the usual batch plus ``batch_ratios`` (effective w0/probe/paired).
+        """
+        if not self.track_skill or self.size == 0:
+            return self.sample(batch_size)
+        rng = rng if rng is not None else np.random
+
+        n = self.size
+        all_idx = np.arange(n)
+        skill = self.skill_id_buf[:n, 0]
+        source = self.source_buf[:n, 0]
+        w0_pool = all_idx[skill == 0]
+        probe_pool = all_idx[skill != 0]
+        paired_pool = probe_pool[source[probe_pool] == SOURCE_DIVERSITY_PAIRED] if probe_pool.size else probe_pool
+        probe_normal_pool = probe_pool[source[probe_pool] == SOURCE_NORMAL] if probe_pool.size else probe_pool
+
+        n_w0 = int(round(float(w0_min_ratio) * batch_size))
+        n_w0 = max(0, min(n_w0, batch_size))
+        n_probe = batch_size - n_w0
+        n_paired = min(int(round(float(paired_sample_ratio) * batch_size)), n_probe)
+        n_probe_normal = n_probe - n_paired
+
+        def _draw(pool, k, *fallbacks):
+            if k <= 0:
+                return np.empty(0, dtype=np.int64)
+            chosen = pool
+            for fb in (pool,) + fallbacks + (all_idx,):
+                if len(chosen) > 0:
+                    break
+                chosen = fb
+            return rng.choice(chosen, size=k, replace=True).astype(np.int64)
+
+        chunks = [
+            _draw(w0_pool, n_w0, all_idx),
+            _draw(paired_pool, n_paired, probe_normal_pool, probe_pool),
+            _draw(probe_normal_pool, n_probe_normal, probe_pool),
+        ]
+        idxs = np.concatenate([c for c in chunks if len(c) > 0]) if any(len(c) for c in chunks) else np.empty(0, np.int64)
+        if len(idxs) < batch_size:
+            pad = rng.choice(all_idx, size=batch_size - len(idxs), replace=True).astype(np.int64)
+            idxs = np.concatenate([idxs, pad])
+        rng.shuffle(idxs)
+
+        batch = self.sample(idxs=idxs)
+        sk = self.skill_id_buf[idxs, 0]
+        so = self.source_buf[idxs, 0]
+        batch['batch_ratios'] = {
+            'w0': float(np.mean(sk == 0)),
+            'probe': float(np.mean(sk != 0)),
+            'paired': float(np.mean(so == SOURCE_DIVERSITY_PAIRED)),
+        }
+        return batch
+
+    def state_dict(self):
+        state = {
+            'z': self.z,
+            'full_obs': self.full_obs,
+            'obs_dict': self.obs_dict,
+            'ptr': self.ptr,
+            'size': self.size,
+            'max_size': self.max_size,
+            'act_buf': self.act_buf.copy(),
+            'rew_buf': self.rew_buf.copy(),
+            'done_buf': self.done_buf.copy(),
+        }
+        if self.obs_dict:
+            state['obs_buf'] = {k: v.copy() for k, v in self.obs_buf.items()}
+            state['next_obs_buf'] = {k: v.copy() for k, v in self.next_obs_buf.items()}
+        else:
+            state['obs_buf'] = self.obs_buf.copy()
+            state['next_obs_buf'] = self.next_obs_buf.copy()
+        if self.z:
+            state['z_buf'] = self.z_buf.copy()
+        if self.full_obs:
+            state['full_obs_buf'] = self.full_obs_buf.copy()
+        state['track_skill'] = self.track_skill
+        if self.track_skill:
+            state['skill_id_buf'] = self.skill_id_buf.copy()
+            state['source_buf'] = self.source_buf.copy()
+            state['reward_task_buf'] = self.reward_task_buf.copy()
+            state['reward_div_buf'] = self.reward_div_buf.copy()
+            state['reward_total_buf'] = self.reward_total_buf.copy()
+        return state
+
+    def load_state_dict(self, state_dict):
+        self.z = bool(state_dict['z'])
+        self.full_obs = bool(state_dict['full_obs'])
+        self.obs_dict = bool(state_dict['obs_dict'])
+        self.ptr = int(state_dict['ptr'])
+        self.size = int(state_dict['size'])
+        self.max_size = int(state_dict['max_size'])
+
+        if self.obs_dict:
+            self.obs_buf = {k: np.array(v, copy=True) for k, v in state_dict['obs_buf'].items()}
+            self.next_obs_buf = {k: np.array(v, copy=True) for k, v in state_dict['next_obs_buf'].items()}
+        else:
+            self.obs_buf = np.array(state_dict['obs_buf'], copy=True)
+            self.next_obs_buf = np.array(state_dict['next_obs_buf'], copy=True)
+
+        self.act_buf = np.array(state_dict['act_buf'], copy=True)
+        self.rew_buf = np.array(state_dict['rew_buf'], copy=True)
+        self.done_buf = np.array(state_dict['done_buf'], copy=True)
+
+        if self.z and 'z_buf' in state_dict:
+            self.z_buf = np.array(state_dict['z_buf'], copy=True)
+        if self.full_obs and 'full_obs_buf' in state_dict:
+            self.full_obs_buf = np.array(state_dict['full_obs_buf'], copy=True)
+
+        # Skill bookkeeping: absent in pre-skill (mode A) checkpoints -> stays off.
+        self.track_skill = bool(state_dict.get('track_skill', False))
+        if self.track_skill and 'skill_id_buf' in state_dict:
+            self.skill_id_buf = np.array(state_dict['skill_id_buf'], copy=True)
+            self.source_buf = np.array(state_dict['source_buf'], copy=True)
+            self.reward_task_buf = np.array(state_dict['reward_task_buf'], copy=True)
+            self.reward_div_buf = np.array(state_dict['reward_div_buf'], copy=True)
+            self.reward_total_buf = np.array(state_dict['reward_total_buf'], copy=True)
     
 class AttrDict(dict):
     __setattr__ = dict.__setitem__
@@ -227,6 +406,34 @@ class OrnsteinUhlenbeckProcess(AnnealedGaussianProcess):
 
     def reset_states(self):
         self.x_prev = self.x0 if self.x0 is not None else np.zeros(self.size)
+
+    def state_dict(self):
+        return {
+            'theta': self.theta,
+            'mu': self.mu,
+            'sigma': self.sigma,
+            'dt': self.dt,
+            'x0': None if self.x0 is None else np.array(self.x0, copy=True),
+            'size': self.size,
+            'sigma_min': self.sigma_min,
+            'n_steps': self.n_steps,
+            'x_prev': np.array(self.x_prev, copy=True),
+            'm': self.m,
+            'c': self.c,
+        }
+
+    def load_state_dict(self, state_dict):
+        self.theta = state_dict['theta']
+        self.mu = state_dict['mu']
+        self.sigma = state_dict['sigma']
+        self.dt = state_dict['dt']
+        self.x0 = None if state_dict['x0'] is None else np.array(state_dict['x0'], copy=True)
+        self.size = state_dict['size']
+        self.sigma_min = state_dict['sigma_min']
+        self.n_steps = state_dict['n_steps']
+        self.x_prev = np.array(state_dict['x_prev'], copy=True)
+        self.m = state_dict['m']
+        self.c = state_dict['c']
 
 def soft_update(target, source, tau):
     for target_param, param in zip(target.parameters(), source.parameters()):

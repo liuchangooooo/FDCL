@@ -33,7 +33,9 @@ class BaseEvaluator(object):
                  env,
                  policy,
                  no_obs_env=None,
-                 unseen_env=None):        
+                 unseen_env=None,
+                 episode_reset_fn=None,
+                 post_step_fn=None):
         with torch.no_grad():
             self.result = []
             self.video_paths = []
@@ -52,7 +54,13 @@ class BaseEvaluator(object):
                 elif self.reward == 'max':
                     self.episode_reward = []
 
-                _, _, _, info = self.rollout(env, policy, episode)
+                _, _, _, info = self.rollout(
+                    env,
+                    policy,
+                    episode,
+                    episode_reset_fn=episode_reset_fn,
+                    post_step_fn=post_step_fn,
+                )
 
                 if info['success']:
                     num_success += 1
@@ -75,10 +83,13 @@ class BaseEvaluator(object):
 
         return np.mean(self.result), log_data
 
-    def rollout(self, env, policy, episode):
+    def rollout(self, env, policy, episode, episode_reset_fn=None, post_step_fn=None):
         # start episode
         env.seed()
-        obs = env.reset()
+        if episode_reset_fn is not None:
+            obs = episode_reset_fn(env, episode)
+        else:
+            obs = env.reset()
         if isinstance(obs, dict):
             obs_th = dict_to_torch(obs, device=self.device)
         else:
@@ -99,6 +110,19 @@ class BaseEvaluator(object):
             action = self.sample_action_fn(policy, obs_th, z)         
             
             obs, reward, done, info = env.step(action[0])
+
+            if post_step_fn is not None:
+                maybe_obs = post_step_fn(
+                    env,
+                    obs,
+                    reward,
+                    done,
+                    info,
+                    episode,
+                    episode_steps,
+                )
+                if maybe_obs is not None:
+                    obs = maybe_obs
 
             if len(trajectory) == 0:
                 trajectory.append(info['trajectory'])
@@ -204,4 +228,3 @@ class BaseEvaluator(object):
         return diversity, filename
 
     
-

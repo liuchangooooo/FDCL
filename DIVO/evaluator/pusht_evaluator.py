@@ -4,6 +4,7 @@ import tqdm
 import pathlib
 import wandb
 import wandb.sdk.data_types.video as wv
+import warnings
 from DIVO.utils.util import *
 import os
 from DIVO.evaluator.base_evaluator import BaseEvaluator
@@ -30,6 +31,7 @@ class MujocoPushTEvaluator(BaseEvaluator):
             *args,
             **kwargs
         )
+        self._obs_dim_warning_cache = set()
         
     def video_render_fn(self, env, policy, render):
         if render:
@@ -50,22 +52,13 @@ class MujocoPushTEvaluator(BaseEvaluator):
         save_anim(self.frames, self.filename[:-4], fps=int(1/env.control_timestep()))
 
     def sample_z_fn(self, policy, obs):
-
-        if hasattr(policy, 'encoder'):
-            if policy.encoder.in_chan > obs.size(1):
-                random_padding = torch.rand(obs.size(0), policy.encoder.in_chan - obs.size(1)).to(obs.device)
-                obs = torch.cat([obs, random_padding*2-1], dim=1)
-
+        obs = self._adapt_obs_dim(policy, obs)
         z = None
 
         return z
 
     def sample_action_fn(self, policy, obs, z):
-        
-        if hasattr(policy, 'encoder'):
-            if policy.encoder.in_chan > obs.size(1):
-                random_padding = torch.rand(obs.size(0), policy.encoder.in_chan - obs.size(1)).to(obs.device)
-                obs = torch.cat([obs, random_padding*2-1], dim=1)
+        obs = self._adapt_obs_dim(policy, obs)
 
         action = policy.predict_action(obs)         
         
@@ -74,3 +67,31 @@ class MujocoPushTEvaluator(BaseEvaluator):
     def end_of_step_fn(self, policy):
         if hasattr(policy, 'num_skills'):
             policy.reset_skill = False
+
+    def _adapt_obs_dim(self, policy, obs):
+        if not hasattr(policy, 'encoder'):
+            return obs
+
+        expected_dim = policy.encoder.in_chan
+        current_dim = obs.size(1)
+
+        if current_dim < expected_dim:
+            random_padding = torch.rand(
+                obs.size(0),
+                expected_dim - current_dim,
+                device=obs.device,
+            )
+            return torch.cat([obs, random_padding * 2 - 1], dim=1)
+
+        if current_dim > expected_dim:
+            key = (current_dim, expected_dim)
+            if key not in self._obs_dim_warning_cache:
+                warnings.warn(
+                    f"Evaluator observed {current_dim} dims but policy expects "
+                    f"{expected_dim}; truncating trailing obstacle features.",
+                    stacklevel=2,
+                )
+                self._obs_dim_warning_cache.add(key)
+            return obs[:, :expected_dim]
+
+        return obs

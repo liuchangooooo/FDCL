@@ -4,6 +4,12 @@ import logging
 import importlib
 import signal
 from typing import List, Dict, Optional
+from DIVO.curriculum.adapters.pusht_adapter import (
+    PUSHT_CORRIDOR_WIDTH,
+    PUSHT_TARGET_XY,
+    pusht_effective_radius,
+)
+from DIVO.curriculum.obstacle_geometry import decode_z_to_xy, encode_xy_to_z
 from DIVO.utils.util import analytic_obs_collision_check
 
 # 延迟导入 openai：避免开发环境未安装时触发静态导入报错
@@ -168,10 +174,37 @@ class StrategyExecutor:
                 return False
             
             return True
+
+        def decode_obstacle(alpha: float, beta: float, start_xy, goal_xy=PUSHT_TARGET_XY):
+            """Convert task-relative obstacle placement to absolute x, y."""
+
+            return decode_z_to_xy(alpha, beta, start_xy=start_xy, goal_xy=goal_xy)
+
+        def encode_obstacle(obs_x: float, obs_y: float, start_xy, goal_xy=PUSHT_TARGET_XY):
+            """Convert absolute x, y to task-relative obstacle placement metadata."""
+
+            z = encode_xy_to_z(
+                obs_x,
+                obs_y,
+                effective_radius=pusht_effective_radius(self.obstacle_size),
+                start_xy=start_xy,
+                goal_xy=goal_xy,
+                corridor_width=PUSHT_CORRIDOR_WIDTH,
+            )
+            return {
+                "alpha": z.alpha,
+                "beta": z.beta,
+                "blockage": z.blockage,
+                "d_start": z.d_start,
+                "d_goal": z.d_goal,
+            }
+
         # 受控 import：仅允许 numpy（避免 LLM 代码 import 其它模块）
         def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
             if name == "numpy":
                 return np
+            if name.startswith("numpy."):
+                return importlib.import_module(name)
             raise ImportError(f"Import blocked in sandbox: {name}")
         
         # 沙箱环境
@@ -179,6 +212,8 @@ class StrategyExecutor:
             'np': np,
             'numpy': np,
             'is_safe': is_safe,  # 注入真实的 SAT 碰撞检测
+            'decode_obstacle': decode_obstacle,
+            'encode_obstacle': encode_obstacle,
             '__builtins__': {
                 '__import__': _safe_import,   # <-- 新增这一行
                 'range': range,
@@ -189,8 +224,10 @@ class StrategyExecutor:
                 'max': max,
                 'float': float,
                 'int': int,
+                'bool': bool,
                 'list': list,
                 'dict': dict,
+                'isinstance': isinstance,
                 'enumerate': enumerate,
                 'zip': zip,
                 'sum': sum,
