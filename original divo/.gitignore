@@ -1,0 +1,10 @@
+.vscode
+*.pyc
+data
+*.mp4
+*.png
+*.ipynb
+datasets
+outputs
+test
+*.pkl

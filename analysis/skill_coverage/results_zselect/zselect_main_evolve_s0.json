@@ -1,0 +1,27 @@
+{
+  "ckpt": "data/outputs/2026.04.27/main_evolve_s0/checkpoints/epoch=410000-test_mean_score=-0.259.ckpt",
+  "k_skills": 16,
+  "obstacle_num": 2,
+  "rows": [
+    {
+      "size": 0.05,
+      "n": 40,
+      "deployed": 0.975,
+      "bestK_critic": 1.0,
+      "feasible": 1.0,
+      "realized": 0.3375,
+      "bestK_minus_deployed": 0.025000000000000022,
+      "feasible_minus_deployed": 0.025000000000000022
+    },
+    {
+      "size": 0.08,
+      "n": 40,
+      "deployed": 0.825,
+      "bestK_critic": 0.8,
+      "feasible": 0.925,
+      "realized": 0.259375,
+      "bestK_minus_deployed": -0.02499999999999991,
+      "feasible_minus_deployed": 0.10000000000000009
+    }
+  ]
+}

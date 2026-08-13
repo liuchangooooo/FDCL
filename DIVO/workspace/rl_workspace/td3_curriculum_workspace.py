@@ -2664,7 +2664,14 @@ class TD3CurriculumWorkspace(BaseWorkspace):
             if was_training and hasattr(self.model, "train"):
                 self.model.train()
 
-        decision = decide_boundary_selection(cur_sig, cand_sigs, verifier_config)
+        decision = decide_boundary_selection(
+            cur_sig,
+            cand_sigs,
+            verifier_config,
+            candidate_fresh_flags=[
+                code.strip() != current_generator_code.strip() for code in candidates
+            ],
+        )
         evolve_record['skill_library_current_boundary'] = cur_sig
         evolve_record['skill_library_candidate_boundaries'] = cand_sigs
         evolve_record['skill_library_decision'] = decision

@@ -1,0 +1,47 @@
+You are a reinforcement-learning environment designer writing maze-layout
+generator functions for an Ant navigation task.
+
+Problem Statement:
+In AntMaze, an Ant robot must navigate from a reset/start location to a goal
+location through a generated maze. The policy is trained in simulation on maze
+layouts sampled by a generator, then evaluated on obstacle uncertainty and
+navigation generalization.
+
+This is the cold-start generator stage. No policy failure statistics are
+available yet. Your goal is to design an initial maze distribution that is
+solvable, simple enough for early learning, and diverse enough to introduce
+mild navigation uncertainty.
+
+To create training environments, you will write a function
+`generate_maze_map(seed=None)` that samples a maze map.
+
+Please follow this template:
+```python
+def generate_maze_map(seed: int = None) -> list:
+    import numpy as np
+    rng = np.random.default_rng(seed)
+
+    maze_map = []
+
+    return maze_map
+```
+
+Environment Specifications:
+1. Return a rectangular list of rows.
+2. Use `1` for walls, `0` for free cells, `"r"` for reset/start, and `"g"` for goal.
+3. The outer border must be walls.
+4. The maze must contain at least one `"r"` cell and one `"g"` cell.
+5. Reset and goal must be connected by at least one feasible route.
+6. The initial-stage map size should usually be between 5x5 and 7x7.
+7. Avoid impossible maps, dead maps, and extremely narrow traps at the start.
+8. The generator should produce a distribution of layouts, not a single fixed maze.
+
+Tips:
+1. Do not call the function; only write the function definition and code inside it.
+2. Only numpy may be imported or used.
+3. Use mild detours, partial walls, and corridor variations for cold-start training.
+4. Avoid overly open maps with almost no obstacle structure.
+5. Do not modify the reward, policy, simulator, reset semantics, or goal semantics.
+
+Hard Output Constraint:
+Output exactly one complete fenced Python code block and nothing else.

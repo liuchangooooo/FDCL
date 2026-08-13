@@ -1,0 +1,228 @@
+# @package _global_
+
+defaults:
+  - _self_
+
+_target_: DIVO.workspace.rl_workspace.td3_ant_workspace.TD3AntWorkspace
+
+name: train
+task_name: td3_ant_nav_obstacle
+exp_name: ant_nav_obstacle_sanity
+
+latent_dim: 8
+state_dim: 41
+obs_dim: 61
+action_size: 8
+statelatent_dim: 49
+obsaction_dim: 69
+
+max_steps: 700
+device: "cuda:0"
+
+env:
+  _target_: ant_nav_obstacle
+  base_env_id: Ant-v5
+  obstacle: true
+  obstacle_mode: train
+  start_xy: [-4.0, 0.0]
+  goal_xy: [4.0, 0.0]
+  start_noise: 0.25
+  goal_noise: 0.0
+  max_episode_steps: ${max_steps}
+  success_threshold: 0.6
+  ant_body_radius: 0.35
+  terminate_on_collision: true
+  terminate_on_unhealthy: false
+  max_obstacles: 4
+  include_contact_forces: false
+  render_mode: null
+  render_world_scale: 1.2
+  train_obstacle_radius: 0.45
+  train_alpha_min: 0.0
+  train_alpha_max: 1.0
+  train_lateral_ratio: 0.15
+  train_start_clearance: 0.20
+  train_goal_clearance: 0.25
+  train_corridor_width: 1.2
+  reward_goal_velocity: 1.0
+  reward_progress: 0.0
+  reward_goal: 50.0
+  reward_ctrl: 0.002
+  reward_collision: 50.0
+  reward_unhealthy: 5.0
+
+no_obs_env:
+  _target_: ant_nav_obstacle
+  base_env_id: Ant-v5
+  obstacle: false
+  obstacle_mode: none
+  start_xy: [-4.0, 0.0]
+  goal_xy: [4.0, 0.0]
+  start_noise: 0.25
+  goal_noise: 0.0
+  max_episode_steps: ${max_steps}
+  success_threshold: ${env.success_threshold}
+  ant_body_radius: ${env.ant_body_radius}
+  terminate_on_collision: ${env.terminate_on_collision}
+  max_obstacles: 4
+  terminate_on_unhealthy: ${env.terminate_on_unhealthy}
+  render_mode: null
+  render_world_scale: ${env.render_world_scale}
+  train_obstacle_radius: ${env.train_obstacle_radius}
+  train_alpha_min: ${env.train_alpha_min}
+  train_alpha_max: ${env.train_alpha_max}
+  train_lateral_ratio: ${env.train_lateral_ratio}
+  train_start_clearance: ${env.train_start_clearance}
+  train_goal_clearance: ${env.train_goal_clearance}
+  train_corridor_width: ${env.train_corridor_width}
+  reward_goal_velocity: ${env.reward_goal_velocity}
+  reward_progress: ${env.reward_progress}
+  reward_goal: ${env.reward_goal}
+  reward_ctrl: ${env.reward_ctrl}
+  reward_collision: ${env.reward_collision}
+  reward_unhealthy: ${env.reward_unhealthy}
+
+unseen_env:
+  _target_: ant_nav_obstacle
+  base_env_id: Ant-v5
+  obstacle: true
+  obstacle_mode: B
+  start_xy: [-4.0, 0.0]
+  goal_xy: [4.0, 0.0]
+  start_noise: 0.25
+  goal_noise: 0.0
+  max_episode_steps: ${max_steps}
+  success_threshold: ${env.success_threshold}
+  ant_body_radius: ${env.ant_body_radius}
+  terminate_on_collision: ${env.terminate_on_collision}
+  max_obstacles: 4
+  terminate_on_unhealthy: ${env.terminate_on_unhealthy}
+  render_mode: null
+  render_world_scale: ${env.render_world_scale}
+  train_obstacle_radius: ${env.train_obstacle_radius}
+  train_alpha_min: ${env.train_alpha_min}
+  train_alpha_max: ${env.train_alpha_max}
+  train_lateral_ratio: ${env.train_lateral_ratio}
+  train_start_clearance: ${env.train_start_clearance}
+  train_goal_clearance: ${env.train_goal_clearance}
+  train_corridor_width: ${env.train_corridor_width}
+  reward_goal_velocity: ${env.reward_goal_velocity}
+  reward_progress: ${env.reward_progress}
+  reward_goal: ${env.reward_goal}
+  reward_ctrl: ${env.reward_ctrl}
+  reward_collision: ${env.reward_collision}
+  reward_unhealthy: ${env.reward_unhealthy}
+
+policy:
+  _target_: ldpi
+  encoder_net:
+    _target_: fc_vec
+    in_chan: ${obs_dim}
+    out_chan: ${latent_dim}
+    l_hidden: [256, 256, 256]
+    activation: ['relu', 'relu', 'relu']
+    out_activation: 'linear'
+  decoder_net:
+    _target_: fc_vec
+    in_chan: ${statelatent_dim}
+    out_chan: ${action_size}
+    l_hidden: [256, 256, 256]
+    activation: ['relu', 'relu', 'relu']
+    out_activation: 'tanh'
+
+critic:
+  _target_: mcritic
+  n_critics: 2
+  net0:
+    _target_: fc_vec
+    in_chan: ${obsaction_dim}
+    out_chan: 1
+    l_hidden: [256, 256, 256]
+    activation: ['relu', 'relu', 'relu']
+    out_activation: 'linear'
+  net1:
+    _target_: fc_vec
+    in_chan: ${obsaction_dim}
+    out_chan: 1
+    l_hidden: [256, 256, 256]
+    activation: ['relu', 'relu', 'relu']
+    out_activation: 'linear'
+
+evaluator:
+  _target_: ant_nav
+  output_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${task_name}/log
+  num_episodes: 20
+  max_steps: ${max_steps}
+  device: ${device}
+  num_save_video: 0
+  reward: mean
+
+rl:
+  replay_buffer_size: 1000000
+  batch_size: 128
+  warmup: 1000
+  gamma: 0.99
+  critic_gradient_clip: false
+  critic_gradient_max_norm: 1
+  policy_gradient_clip: false
+  policy_gradient_max_norm: 1
+  add_noise: true
+  noise_sigma: 0.2
+  noise_epsilon: 50000
+  soft_update_tau: 0.005
+  policy_update: 2
+
+optimizer:
+  _target_: torch.optim.AdamW
+  betas: [0.95, 0.999]
+  eps: 1.0e-08
+  lr: 0.0001
+  weight_decay: 1.0e-06
+
+critic_optimizer:
+  _target_: torch.optim.AdamW
+  betas: [0.95, 0.999]
+  eps: 1.0e-08
+  lr: 0.0001
+  weight_decay: 1.0e-06
+
+training:
+  num_epochs: 1000
+  device: ${device}
+  seed: 42
+  policy_init_checkpoint: null
+  checkpoint_every: 1000
+  validate: true
+  validate_steps: 1000
+  regularize_z: gaussian
+  reg_coeff: 1.0
+
+log: false
+log_interval: 100
+
+logging:
+  project: DivPolicy-Ant
+  resume: true
+  mode: online
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${task_name}
+  tags: ["${task_name}", "${exp_name}"]
+  id: null
+  group: null
+
+checkpoint:
+  topk:
+    monitor_key: test_mean_score
+    mode: max
+    k: 5
+    format_str: 'epoch={epoch:04d}-test_mean_score={test_mean_score:.3f}.ckpt'
+  save_last_ckpt: true
+  save_last_snapshot: false
+
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${task_name}
+  sweep:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${task_name}
+    subdir: ${hydra.job.num}

@@ -1,0 +1,157 @@
+# ============================================================================
+# nav 隐技能库可学性课程 —— hydra 一站式配置。
+# 参照 Push-T 实跑配置 config/pusht/exp_llm_curriculum.yaml 的分节组织。
+# Nav 不复用 Push-T 的 _target_ workspace，但本文件中的实验参数都由 train_stage2
+# 读取；env 段属于固定任务协议，启动时会与 nav_env.py 的物理常量逐项校验。
+#
+# 用法(safenav,cwd=/home/hnu-w/DIVO/DIVO):
+#   MUJOCO_GL=egl python -m nav.train_stage2                          # 默认 = arm d 本方法(mock)
+#   MUJOCO_GL=egl python -m nav.train_stage2 seed=1 tag=navv4_d_libcur_s1
+#   四格开关(hydra 覆盖语法 key=value):
+#     (S0) 单策略课程     : training.train_library=false curriculum.evolve.probe_feedback=single
+#     (b') 库+单策略信号  : training.train_library=true  curriculum.evolve.probe_feedback=single
+#     (c)  库无课程       : training.train_library=true  curriculum.evolve.enabled=false
+#     (d)  库信号课程=本方法:默认配置
+#   真 LLM:provider=openai(api_key/base_url/model 见 curriculum 段)
+#
+# 注:环境几何/物理的执行事实来源仍是 nav_env.py，以保证训练、BMUD 和渲染一致；
+#     YAML 将其完整列出并做启动校验，避免配置与实际任务静默漂移。
+# ============================================================================
+defaults:
+  - _self_
+
+name: train
+task_name: nav_skill_curriculum
+exp_name: exp_llm_curriculum
+
+seed: 0
+tag: navv4_d_libcur
+device: cuda
+provider: mock            # mock | openai
+num_pillars: 2             # 固定协议；train_stage2 会拒绝覆盖为其它数量
+obs_dim: 44                 # 启动时与 Nav 环境 observation 维度校验
+action_dim: 2               # Point agent 二维控制
+
+# ===== 技能库(路 B / Skill-Library Curriculum;对齐 Push-T skill 段)=====
+skill:
+  K: 4                    # probe 技能数 w_1..w_K;w_0 为部署技能
+  codebook_type: one_hot  # one_hot(d_w=K+1) | random(d_w 与 K 解耦)
+  d_w: null               # random 时的码宽;null -> K+1
+  d_z: 8                  # z 编码维(encoder 吃完整 obs -> z,对齐 Push-T z=encoder(obs))
+  w0_rollout_ratio: 0.5   # P(w_0)(train_library=false 时强制 1.0)
+  lambda_z: 1.0           # z 高斯正则(对齐 Push-T reg_coeff=1.0)
+  # 与 Push-T Route-B V0 一致：当前主实验关闭显式 r_div。
+  # 非零值会在启动时报错，而不是被静默忽略。
+  diversity_every: 0
+  beta_div: 0.0
+
+# ===== LLM 障碍生成 + ACGS 闭环(对齐 Push-T curriculum 段)=====
+curriculum:
+  api_type: openai                # provider=openai 时必须与此一致
+  api_key: ${oc.env:OPENAI_API_KEY,null}  # 从环境变量 OPENAI_API_KEY 读取，勿硬编码到仓库
+  base_url: "https://ai.lv10.ren/v1"
+  model: "gpt-5.5"
+  task_name: "Navigate"
+  temperature: 0.7
+  max_tokens: 1500
+  timeout_sec: 5                  # LLM generator sandbox 超时
+
+  generator:
+    init_mode: llm                # llm/provider 现场生成 G_0 | file 从 init_path 载入
+    init_path: null               # 四格公平对比:各臂共享同一 G_0 时指定
+    save_artifacts: true          # 存盘 G_0/演进后的 generator 代码到 run 目录
+
+  evolve:
+    enabled: true                 # 关闭 = 无课程(固定 G_0);等价 max_evolve_count=0
+    feedback_mode: skill_library  # Route B V0 主线(W_probe boundary + 单标量治锁 best-of-R)
+    # 课程反馈信号源(与 backbone 训练解耦,用于 S0/b′/d 增益分解):
+    #   library -> 用 W_probe(w_1..K)算 boundary 信号(本方法 d)
+    #   single  -> 只用 w_0 的二值成绩(单策略信号,S0/b′)
+    probe_feedback: library
+    trigger_mode: fixed
+    # nav 用 step 计数(Push-T 用 episode:first_episode=5000, interval=5000ep×10步=50k步)
+    evolve_after: 25000           # 首次 evolve 前预训步数
+    evolve_interval_steps: 50000  # 之后每 N 步 evolve 一次
+    max_evolve_count: 30          # 最多 evolve 次数(=0 关进化,用于 arm a/c)
+    # ---- 单标量治锁 verifier 阈值(对齐 Push-T curriculum.evolve.skill_library)----
+    skill_library:
+      candidates_per_cycle: 3         # best-of-R
+      valid_rate_min: 0.8             # 绝对硬门:物理有效率
+      duplicate_rate_max: 0.25        # 绝对硬门:布局重复率上限
+      min_boundary_count_delta: 4     # 未饱和净改进阈值
+      r_easy_max: 0.8                 # 饱和逃逸(全易 -> HARDEN)
+      r_hard_max: 0.8                 # 饱和逃逸(全难 -> RELAX)
+      tau_saturation: 0.125           # boundary 带 tau<p<1-tau(K=4)
+      target_delta: 0.15              # 近 0.5 判定(仅诊断)
+      exclude_invalid_from_boundary: true   # Edit-1(对齐 Push-T:已开启)
+      # 未饱和且没有 +4 净改进时，允许换入通过硬门、基本等难的新代码候选。
+      diversify_on_hold: true
+      diversify_bc_tolerance: 2       # candidate_bc >= current_bc - 2
+      diversify_easy_eps: 0.05        # 防止刷新候选系统性变易
+    # ---- 方向(context)探针(对齐 Push-T curriculum.evolve.skill_signal)----
+    skill_signal:
+      probe_M: 40                     # 方向探针场景数
+      context_n: 4                    # 每个 SOURCE/TARGET/GUARD 的代表场景数
+      include_behavior: true          # 复用探针 rollout 的成功/失败路径
+      route_waypoints: 5              # 每条路径下采样点数
+    # ---- 验收(candidate)探针(对齐 Push-T curriculum.evolve.candidate_verifier)----
+    candidate_verifier:
+      enabled: true                   # false:候选通过 sandbox 后直接采用第一个
+      use_verifier: true              # verifier 消融开关
+      probe_M: 30                     # 每候选 paired 打分场景数
+
+# ===== TD3 / 优化(nav 任务本质:低层 ~500 步/episode,gamma=0.99)=====
+rl:
+  gamma: 0.99
+  tau: 0.005                # polyak
+  actor_lr: 0.0003
+  critic_lr: 0.0003
+  policy_noise: 0.2         # target policy smoothing
+  noise_clip: 0.5
+  policy_delay: 2
+  hidden: [256, 256]
+  batch: 256
+  expl_noise: 0.1
+  start_steps: 10000        # warmup(纯随机动作)
+  replay_size: 1000000
+
+# ===== 训练主循环 =====
+training:
+  total_steps: 300000        # 必须整除 eval_every；最终正式模型只使用 best.pt
+  max_ep_steps: 500
+  eval_every: 25000         # 每 N 步验证并更新 best/latest；latest 不会在训练结束时被覆盖
+  eval_n: 20                # n_env_validate(对齐 Push-T)
+  reject_trivial: true
+  # backbone 训练:true 训整库(w_0+W_probe);false 只训 w_0(纯单策略基线 S0)
+  train_library: true
+
+# ===== 固定任务协议（启动时与 nav_env.py 逐项校验）=====
+env:
+  # 小世界(整体 ~×0.5 缩小,让固定尺寸 pillar 相对世界更大 -> 自然挡路)
+  start_sample: {x_range: [-0.8, -0.1], y_range: [-0.45, 0.45]}
+  goal: [0.65, 0.0]
+  goal_size: 0.2
+  extents: [-0.9, -0.9, 0.9, 0.9]
+  pillar: {size: 0.15, keepout: 0.13, height: 0.15}
+  agent_radius: 0.10
+  collision_is_failure: true
+  collision_penalty: 2.0
+  oob_bound: 1.0
+  oob_is_failure: true
+  oob_penalty: 2.0
+  obstacle_region: 0.5
+  val_obstacle_region: 0.5
+  start_pillar_clearance: 0.45
+  between_offset_range: [0.45, 0.65]
+  between_lateral_range: [-0.10, 0.10]
+  min_start_goal_dist: 0.5
+  obs_dim: ${obs_dim}
+  action_dim: ${action_dim}
+
+# ===== hydra:不切 cwd(nav 靠 cwd=DIVO/DIVO + python -m),输出归到 nav/runs/hydra =====
+hydra:
+  run:
+    dir: nav/runs/hydra/${now:%Y.%m.%d}/${now:%H.%M.%S}_${tag}
+  output_subdir: hydra
+  job:
+    chdir: false

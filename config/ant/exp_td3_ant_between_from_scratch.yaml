@@ -1,0 +1,158 @@
+# @package _global_
+
+defaults:
+  - train_td3_ant_nav_obstacle
+  - _self_
+
+exp_name: ant_full_divo_between_radius03_goalvel_s0
+
+latent_dim: 8
+state_dim: 41
+obs_dim: 61
+action_size: 8
+statelatent_dim: 49
+obsaction_dim: 69
+
+max_steps: 700
+device: "cuda:0"
+
+env:
+  obstacle: true
+  obstacle_mode: train
+  start_xy: [-4.0, 0.0]
+  goal_xy: [4.0, 0.0]
+  start_noise: 0.0
+  goal_noise: 0.0
+  render_mode: rgb_array
+  render_world_scale: 1.4
+  train_obstacle_radius: 0.30
+  train_alpha_min: 0.0
+  train_alpha_max: 1.0
+  train_lateral_ratio: 0.15
+  train_start_clearance: 0.20
+  train_goal_clearance: 0.25
+  train_corridor_width: 1.2
+  success_threshold: 1.0
+  ant_body_radius: 0.35
+  terminate_on_collision: true
+  terminate_on_unhealthy: false
+  reward_goal_velocity: 1.0
+  reward_progress: 0.0
+  reward_goal: 150.0
+  reward_ctrl: 0.01
+  reward_collision: 100.0
+  reward_unhealthy: 5.0
+  reward_clearance: 0.5
+  clearance_margin: 0.3
+  normalize_task_obs: true
+
+no_obs_env:
+  obstacle: true
+  obstacle_mode: seen
+  start_xy: ${env.start_xy}
+  goal_xy: ${env.goal_xy}
+  start_noise: ${env.start_noise}
+  goal_noise: ${env.goal_noise}
+  render_mode: ${env.render_mode}
+  render_world_scale: ${env.render_world_scale}
+  train_obstacle_radius: ${env.train_obstacle_radius}
+  train_alpha_min: ${env.train_alpha_min}
+  train_alpha_max: ${env.train_alpha_max}
+  train_lateral_ratio: ${env.train_lateral_ratio}
+  train_start_clearance: ${env.train_start_clearance}
+  train_goal_clearance: ${env.train_goal_clearance}
+  train_corridor_width: ${env.train_corridor_width}
+  success_threshold: ${env.success_threshold}
+  ant_body_radius: ${env.ant_body_radius}
+  terminate_on_collision: ${env.terminate_on_collision}
+  terminate_on_unhealthy: ${env.terminate_on_unhealthy}
+  reward_goal_velocity: ${env.reward_goal_velocity}
+  reward_progress: ${env.reward_progress}
+  reward_goal: ${env.reward_goal}
+  reward_ctrl: ${env.reward_ctrl}
+  reward_collision: ${env.reward_collision}
+  reward_unhealthy: ${env.reward_unhealthy}
+  reward_clearance: ${env.reward_clearance}
+  clearance_margin: ${env.clearance_margin}
+  normalize_task_obs: ${env.normalize_task_obs}
+
+unseen_env:
+  obstacle: true
+  obstacle_mode: seen
+  start_xy: ${env.start_xy}
+  goal_xy: ${env.goal_xy}
+  start_noise: ${env.start_noise}
+  goal_noise: ${env.goal_noise}
+  render_mode: ${env.render_mode}
+  render_world_scale: ${env.render_world_scale}
+  train_obstacle_radius: ${env.train_obstacle_radius}
+  train_alpha_min: ${env.train_alpha_min}
+  train_alpha_max: ${env.train_alpha_max}
+  train_lateral_ratio: ${env.train_lateral_ratio}
+  train_start_clearance: ${env.train_start_clearance}
+  train_goal_clearance: ${env.train_goal_clearance}
+  train_corridor_width: ${env.train_corridor_width}
+  success_threshold: ${env.success_threshold}
+  ant_body_radius: ${env.ant_body_radius}
+  terminate_on_collision: ${env.terminate_on_collision}
+  terminate_on_unhealthy: ${env.terminate_on_unhealthy}
+  reward_goal_velocity: ${env.reward_goal_velocity}
+  reward_progress: ${env.reward_progress}
+  reward_goal: ${env.reward_goal}
+  reward_ctrl: ${env.reward_ctrl}
+  reward_collision: ${env.reward_collision}
+  reward_unhealthy: ${env.reward_unhealthy}
+  reward_clearance: ${env.reward_clearance}
+  clearance_margin: ${env.clearance_margin}
+  normalize_task_obs: ${env.normalize_task_obs}
+
+policy:
+  encoder_net:
+    l_hidden: [512, 512, 512]
+  decoder_net:
+    l_hidden: [512, 512, 512]
+
+critic:
+  net0:
+    l_hidden: [512, 512, 512]
+  net1:
+    l_hidden: [512, 512, 512]
+
+evaluator:
+  output_dir: data/outputs/ant_debug/${exp_name}/eval
+  num_episodes: 20
+  max_steps: ${max_steps}
+  num_save_video: 2
+  reward: mean
+
+rl:
+  replay_buffer_size: 1000000
+  batch_size: 256
+  warmup: 1000
+  gamma: 0.99
+  add_noise: true
+  noise_sigma: 0.2
+  noise_epsilon: 50000
+  soft_update_tau: 0.005
+  policy_update: 2
+
+training:
+  num_epochs: 500000
+  seed: 0
+  policy_init_checkpoint: null
+  checkpoint_every: 50000
+  validate: true
+  validate_steps: 25000
+  regularize_z: false
+
+log: true
+log_interval: 100
+
+logging:
+  project: DivPolicy-Ant
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${exp_name}
+  tags: ["td3_ant_between", "divo_between", "fixed_start_goal", "${exp_name}", "from_scratch"]
+
+hydra:
+  run:
+    dir: data/outputs/ant_debug/${exp_name}

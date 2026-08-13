@@ -1,0 +1,64 @@
+Layout-Level Failure Attribution Summary
+========================================
+rollouts: /home/hnu-w/DIVO/data/outputs/2026.05.30/14.34.48_td3_pusht_llm_curriculum/obstacle_rollouts.jsonl
+episodes: 320934
+failure_rate: 0.118
+min_support: 100
+min_key_count: 50
+
+Termination counts:
+- collision: 26781
+- fall: 405
+- success: 282923
+- timeout: 10825
+
+Single-obstacle baseline best:
+- alpha=025_to_050|beta_abs=centerline|blockage=high | support=273, failure_rate=0.971, lift=8.196
+
+Best layout-level patterns by family:
+
+[layout_basic]
+- failure_lift: start_region=x_pos__y_pos|path_len_bin=long|num_obstacles_bin=2|max_blockage_bin=high|medhigh_count_bin=1|pair_side_mode=opposite_side|min_pair_dist_bin=medium | support=105, failure_rate=1.000, lift=8.443, dominant=collision_tblock_early
+- failure_key_lift: key=collision_tblock_early, lift=14.453, count=105, pattern=start_region=x_pos__y_pos|path_len_bin=long|num_obstacles_bin=2|max_blockage_bin=high|medhigh_count_bin=1|pair_side_mode=opposite_side|min_pair_dist_bin=medium
+
+[layout_path_conditioned]
+- failure_lift: start_region=x_pos__y_pos|path_angle_bin=sector_0|path_len_bin=long|near_count_bin=2|medhigh_count_bin=2|pair_side_mode=opposite_side | support=100, failure_rate=1.000, lift=8.443, dominant=collision_tblock_early
+- failure_key_lift: key=collision_tblock_early, lift=14.453, count=100, pattern=start_region=x_pos__y_pos|path_angle_bin=sector_0|path_len_bin=long|near_count_bin=2|medhigh_count_bin=2|pair_side_mode=opposite_side
+
+[layout_pressure]
+- failure_lift: path_len_bin=long|max_blockage_bin=medium|medhigh_count_bin=2|near_count_bin=2|center_count_bin=0|min_pair_dist_bin=close|pressure_bin=high | support=215, failure_rate=1.000, lift=8.443, dominant=collision_tblock_early
+- failure_key_lift: key=collision_tblock_early, lift=14.453, count=112, pattern=path_len_bin=long|max_blockage_bin=medium|medhigh_count_bin=1|near_count_bin=2|center_count_bin=0|min_pair_dist_bin=medium|pressure_bin=medium
+
+[start_behavior_context]
+- failure_lift: start_region=x_neg__y_pos|start_theta_bin=sector_7|path_angle_bin=sector_3|near_count_bin=1|far_count_bin=1|medhigh_count_bin=1 | support=129, failure_rate=0.915, lift=7.723, dominant=collision_tblock_early
+- failure_key_lift: key=collision_tblock_early, lift=13.221, count=118, pattern=start_region=x_neg__y_pos|start_theta_bin=sector_7|path_angle_bin=sector_3|near_count_bin=1|far_count_bin=1|medhigh_count_bin=1
+
+Top failure-lift rows:
+
+[layout_basic]
+1. start_region=x_pos__y_pos|path_len_bin=long|num_obstacles_bin=2|max_blockage_bin=high|medhigh_count_bin=1|pair_side_mode=opposite_side|min_pair_dist_bin=medium | support=105, failure_rate=1.000, lift=8.443, dominant=collision_tblock_early (105)
+2. start_region=x_pos__y_pos|path_len_bin=long|num_obstacles_bin=2|max_blockage_bin=medium|medhigh_count_bin=2|pair_side_mode=opposite_side|min_pair_dist_bin=close | support=100, failure_rate=1.000, lift=8.443, dominant=collision_tblock_early (100)
+3. start_region=x_pos__y_neg|path_len_bin=long|num_obstacles_bin=2|max_blockage_bin=medium|medhigh_count_bin=1|pair_side_mode=opposite_side|min_pair_dist_bin=medium | support=220, failure_rate=0.995, lift=8.405, dominant=collision_tblock_early (216)
+4. start_region=x_pos__y_pos|path_len_bin=long|num_obstacles_bin=2|max_blockage_bin=medium|medhigh_count_bin=1|pair_side_mode=opposite_side|min_pair_dist_bin=medium | support=349, failure_rate=0.991, lift=8.371, dominant=collision_tblock_early (344)
+5. start_region=x_neg__y_pos|path_len_bin=long|num_obstacles_bin=2|max_blockage_bin=medium|medhigh_count_bin=1|pair_side_mode=opposite_side|min_pair_dist_bin=medium | support=221, failure_rate=0.991, lift=8.367, dominant=collision_tblock_early (217)
+
+[layout_path_conditioned]
+1. start_region=x_pos__y_pos|path_angle_bin=sector_0|path_len_bin=long|near_count_bin=2|medhigh_count_bin=2|pair_side_mode=opposite_side | support=100, failure_rate=1.000, lift=8.443, dominant=collision_tblock_early (100)
+2. start_region=x_pos__y_neg|path_angle_bin=sector_6|path_len_bin=long|near_count_bin=1|medhigh_count_bin=1|pair_side_mode=opposite_side | support=235, failure_rate=0.936, lift=7.904, dominant=collision_tblock_early (218)
+3. start_region=x_neg__y_pos|path_angle_bin=sector_3|path_len_bin=long|near_count_bin=1|medhigh_count_bin=1|pair_side_mode=opposite_side | support=291, failure_rate=0.921, lift=7.776, dominant=collision_tblock_early (264)
+4. start_region=x_neg__y_pos|path_angle_bin=sector_2|path_len_bin=long|near_count_bin=1|medhigh_count_bin=1|pair_side_mode=opposite_side | support=251, failure_rate=0.912, lift=7.703, dominant=collision_tblock_early (228)
+5. start_region=x_pos__y_neg|path_angle_bin=sector_7|path_len_bin=long|near_count_bin=1|medhigh_count_bin=1|pair_side_mode=opposite_side | support=256, failure_rate=0.902, lift=7.619, dominant=collision_tblock_early (227)
+
+[layout_pressure]
+1. path_len_bin=long|max_blockage_bin=medium|medhigh_count_bin=2|near_count_bin=2|center_count_bin=0|min_pair_dist_bin=close|pressure_bin=high | support=215, failure_rate=1.000, lift=8.443, dominant=collision_tblock_early (209)
+2. path_len_bin=long|max_blockage_bin=medium|medhigh_count_bin=1|near_count_bin=2|center_count_bin=0|min_pair_dist_bin=medium|pressure_bin=medium | support=112, failure_rate=1.000, lift=8.443, dominant=collision_tblock_early (112)
+3. path_len_bin=long|max_blockage_bin=high|medhigh_count_bin=2|near_count_bin=2|center_count_bin=0|min_pair_dist_bin=close|pressure_bin=high | support=130, failure_rate=0.977, lift=8.248, dominant=collision_tblock_early (126)
+4. path_len_bin=long|max_blockage_bin=high|medhigh_count_bin=1|near_count_bin=1|center_count_bin=0|min_pair_dist_bin=medium|pressure_bin=medium | support=267, failure_rate=0.899, lift=7.589, dominant=collision_tblock_early (239)
+5. path_len_bin=long|max_blockage_bin=high|medhigh_count_bin=1|near_count_bin=1|center_count_bin=0|min_pair_dist_bin=far|pressure_bin=medium | support=292, failure_rate=0.853, lift=7.200, dominant=collision_tblock_early (246)
+
+[start_behavior_context]
+1. start_region=x_neg__y_pos|start_theta_bin=sector_7|path_angle_bin=sector_3|near_count_bin=1|far_count_bin=1|medhigh_count_bin=1 | support=129, failure_rate=0.915, lift=7.723, dominant=collision_tblock_early (118)
+2. start_region=x_neg__y_pos|start_theta_bin=sector_0|path_angle_bin=sector_3|near_count_bin=1|far_count_bin=1|medhigh_count_bin=1 | support=163, failure_rate=0.896, lift=7.563, dominant=collision_tblock_early (144)
+3. start_region=x_pos__y_neg|start_theta_bin=sector_6|path_angle_bin=sector_6|near_count_bin=1|far_count_bin=1|medhigh_count_bin=1 | support=107, failure_rate=0.869, lift=7.338, dominant=collision_tblock_early (93)
+4. start_region=x_pos__y_neg|start_theta_bin=sector_5|path_angle_bin=sector_6|near_count_bin=1|far_count_bin=1|medhigh_count_bin=1 | support=167, failure_rate=0.856, lift=7.230, dominant=collision_tblock_early (143)
+5. start_region=x_neg__y_pos|start_theta_bin=sector_7|path_angle_bin=sector_2|near_count_bin=1|far_count_bin=1|medhigh_count_bin=1 | support=118, failure_rate=0.805, lift=6.797, dominant=collision_tblock_early (93)

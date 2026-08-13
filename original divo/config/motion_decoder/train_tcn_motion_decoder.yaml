@@ -1,0 +1,96 @@
+defaults:
+  - _self_
+_target_: DIVO.workspace.motion_decoder_workspace.motion_decoder_workspace.MotionDecoderWorkspace
+
+name: train
+task_name: TCNMotionDecoder
+exp_name: run1
+
+device: "cuda:0"
+dataset_dir: data/outputs/2025.05.20/23.45.44_td3_pusht_mujuco_obstacle/ 
+
+NUM_SUBSTEPS: 5
+len_traj: 200 # 1000/NUM_SUBSTEPS
+motion_dim: 800 # len_traj*4
+max_steps: 10
+
+state_dim: 4
+action_dim: 6
+latent_dim: 3
+
+statez_dim: 7 #state_dim + latent_dim
+stateaction_dim: 10 #state_dim + action_dim
+splinedaction_dim: 400 #len_traj*2
+
+now: ${now:%Y.%m.%d.%H.%M.%S}
+
+env:
+  _target_: pusht_mujoco
+  obstacle: True
+  obstacle_size: 0.01
+  obstacle_dist: random
+  action_scale: 4
+  NUM_SUBSTEPS: ${NUM_SUBSTEPS}
+  action_dim: [6, ]
+  obs_dim: [6, ]
+  action_reg: true
+  reg_coeff: 1.0
+  motion_pred: true
+
+policy:
+  checkpoint: data/outputs/2025.05.20/23.45.44_td3_pusht_mujuco_obstacle/checkpoints/model_latest.pt
+
+motion_decoder:
+  _target_: tcn
+  info: splined_action
+  in_chan: 2 # match info
+  out_chan: ${state_dim}
+  hidden_chan: 128
+  kernel_size: 5 # should be bigger than dilation_base
+  dilation_base: 3 # dilation on ith layer = dilation_base^i
+  len_traj: ${len_traj}
+  loss_criterion: 'feature_mse' # 'feature_mse', 'mse'
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.0e-4
+  betas: [0.95, 0.999]
+  eps: 1.0e-8
+  # weight_decay: 1.0e-6
+
+training:
+  dataset_size: all # all or size of dataset
+  num_epochs: 300
+  batch_size: 512
+  train_ratio: 0.9
+  validate_ratio: 0.1
+  device: ${device}
+  seed: 42
+  checkpoint_every: 100
+  validate_steps: 50
+  num_validate_videos: 3
+  gradient_clip: False
+  gradient_max_norm: 1
+  lr_scheduler: cosine
+  lr_warmup_steps: 100
+
+log : True
+log_interval: 50
+
+logging:
+  project: DivPolicy
+  resume: True
+  mode: online
+  name: ${now}_${task_name}
+  tags: ["${task_name}", "${exp_name}"]
+  id: null
+  group: null
+  
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: ${dataset_dir}/motion_decoder/${now}_${task_name}
+  sweep:
+    dir: ${dataset_dir}/motion_decoder/${now}_${task_name}
+    subdir: ${hydra.job.num}

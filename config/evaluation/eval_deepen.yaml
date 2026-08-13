@@ -1,0 +1,86 @@
+defaults:
+  - _self_
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+
+_target_: evaluation.Evaluator
+
+name: eval_deepen
+task_name: evaluation_deepen
+exp_name: final_policy_only_deepen
+
+mode: policy_only
+
+device: "cuda:0"
+max_steps: 10
+num_episodes: 30
+num_render: 0
+reward: last
+seed: 0
+
+output_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_eval_deepen
+
+env:
+  _target_: pusht_mujoco
+  obstacle: True
+  obstacle_num: 1
+  obstacle_size: 0.03
+  obstacle_shape: box
+  obstacle_dist: random
+  action_scale: 4
+  NUM_SUBSTEPS: 5
+  action_dim: [6, ]
+  obs_dim: [6, ]
+  action_reg: True
+  reg_coeff: 1.0
+  generate_dataset: False
+  motion_pred: False
+  eval: True
+  dynamics_randomization: False
+
+# DIVO-scale "deepened" columns: each axis +1 step over DIVO families.
+# DIVO M = 3/0.03 ; B = 1/0.05.
+benchmarks:
+  enabled: True
+  order: [MP, MPP, MPPP, BP]
+
+  MP:    # M+  : 3 -> 4 obstacles, same size
+    env_overrides:
+      obstacle_num: 4
+      obstacle_size: 0.03
+      obstacle_shape: box
+      obstacle_dist: random
+
+  MPP:   # M++ : 4 obstacles, slightly larger
+    env_overrides:
+      obstacle_num: 4
+      obstacle_size: 0.04
+      obstacle_shape: box
+      obstacle_dist: random
+
+  MPPP:  # M+++: 4 obstacles, 0.05 (upper end of DIVO scale)
+    env_overrides:
+      obstacle_num: 4
+      obstacle_size: 0.05
+      obstacle_shape: box
+      obstacle_dist: random
+
+  BP:    # B+  : 1 -> 2 big obstacles
+    env_overrides:
+      obstacle_num: 2
+      obstacle_size: 0.06
+      obstacle_shape: box
+      obstacle_dist: random
+
+sampler:
+  checkpoint: None
+motion_decoder:
+  checkpoint: None
+
+policy:
+  checkpoint: PLACEHOLDER
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .

@@ -1,0 +1,16 @@
+We trained an Ant navigation policy using the maze generator shown below, and
+tracked policy performance over the latest training batch.
+
+{current_generator_context}
+
+{policy_statistics}
+
+{attribution_evidence}
+
+{coverage_evidence}
+
+{history_evidence}
+
+{counterfactual_evidence}
+
+{evolution_request}

@@ -1,0 +1,44 @@
+You are a reinforcement-learning environment designer writing pillar-generator code for the Navigation training task.
+
+Problem Statement:
+In Navigation, a Point agent navigates in a flat arena from a sampled start position to the fixed goal `(+0.65, 0.0)`. During training, the environment may contain Pillars. The policy should learn to reach the goal while handling obstacle uncertainty.
+
+This prompt is for initial generator creation. No policy feedback is available yet. Your task is to write an executable generator function that samples a solvable and diverse initial pillar distribution for training.
+
+Function Contract:
+```python
+def generate_pillars(agent_start: np.ndarray, goal: np.ndarray, num_pillars: int) -> list:
+    sx, sy = agent_start
+    gx, gy = goal
+    pillars = []
+    return pillars
+```
+
+Inputs:
+- `agent_start`: numpy array `[sx, sy]`, the current Point-agent start position; `goal`: numpy array `[gx, gy]`, the fixed goal position.
+- `num_pillars`: the exact number of pillars requested by the environment.
+
+Return Format:
+- Return exactly `num_pillars` pillars.
+- Each pillar must be a dictionary with fields `x`, `y`, and `purpose`.
+- `x` and `y` are pillar center coordinates in meters.
+- `purpose` is a short ASCII string describing the pillar role.
+
+Environment Constraints:
+- The goal position is fixed at `(+0.65, 0.0)`.
+- Pillar size and pillar count are fixed by the simulator.
+- Valid pillar centers should stay inside `x,y in [-0.5, 0.5]`.
+- Before accepting a pillar, call `is_safe(x, y, sx, sy, gx, gy)`.
+- Do not modify the policy, reward, simulator, goal position, pillar size, or pillar count.
+
+Design Goal:
+Generate a stochastic training distribution, not a single fixed layout. Initial layouts should be learnable, solvable, mildly constraining, and useful for learning obstacle-aware navigation behavior.
+
+Allowed Tools:
+- You may use numpy as `np`.
+- You may call `is_safe(...)`.
+- Do not import modules other than numpy.
+- Do not print, call the function, or write code outside the function definition.
+
+Final Answer:
+Output exactly one complete fenced Python code block and nothing else.

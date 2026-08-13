@@ -1,0 +1,26 @@
+Please generate an initial AntMaze training-layout generator for the cold-start
+stage.
+
+Cold-start design target:
+- simple navigation structure
+- mild obstacle uncertainty
+- at least one feasible corridor from reset to goal
+- small detours or wall variations are allowed
+- avoid hard mazes that require advanced exploration from the beginning
+
+The generator should define a distribution over maze layouts, not a single fixed
+layout. It may randomly choose among several related layouts or sample wall/gap
+positions, but every returned map must be valid and solvable.
+
+Use this exact interface:
+```python
+def generate_maze_map(seed: int = None) -> list:
+    import numpy as np
+    rng = np.random.default_rng(seed)
+
+    maze_map = []
+    return maze_map
+```
+
+Final answer:
+Output exactly one complete fenced Python code block and nothing else.

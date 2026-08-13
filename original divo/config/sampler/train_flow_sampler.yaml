@@ -1,0 +1,95 @@
+defaults:
+  - _self_
+_target_: DIVO.workspace.sampler_workspace.sampler_workspace.SamplerWorkspace
+
+name: train
+task_name: FlowSampler
+exp_name: run1
+
+device: "cuda:0"
+max_steps: 10
+dataset_dir: data/outputs/2025.05.20/23.45.44_td3_pusht_mujuco_obstacle/ 
+
+now: ${now:%Y.%m.%d.%H.%M.%S}
+
+dataset:
+  generate: True
+  num_episodes: 10000
+  num_samples: 100
+
+env:
+  _target_: pusht_mujoco
+  obstacle: true
+  obstacle_size: 0.01
+  obstacle_dist: random
+  action_scale: 4
+  NUM_SUBSTEPS: 5
+  action_dim: [6, ]
+  obs_dim: [6, ] #6
+  action_reg: True
+  reg_coeff: 1.0
+  generate_dataset: True
+
+sampler:
+  train: true
+  _target_: "flowmodel"
+  velocity_field_net:
+    _target_: vf_fc_vec
+    in_chan: 8 # state(4) + z(3) + time(1)
+    out_chan: 3 # z
+    l_hidden: [4096, 4096, 4096]
+    activation: ['gelu', 'gelu', 'gelu']
+    out_activation: 'linear'
+  prob_path: OT
+  sigma_1: 0.01
+  z_dim: 3
+  core_cond: None
+
+ema:
+  _target_: None
+
+policy:
+  checkpoint: data/outputs/2025.05.20/23.45.44_td3_pusht_mujuco_obstacle/checkpoints/model_latest.pt
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.0e-5
+  betas: [0.95, 0.999]
+  eps: 1.0e-8
+  weight_decay: 1.0e-7
+
+training:
+  num_epochs: 200
+  dataset_size: all # all, num_data
+  batch_size: 256
+  train_ratio: 0.9
+  validate_ratio: 0.1
+  device: ${device}
+  seed: 42
+  checkpoint_every: 100
+  validate_steps: 10
+  gradient_clip: False
+  gradient_max_norm: 1
+  lr_scheduler: cosine
+  lr_warmup_steps: 100
+
+log : True
+log_interval: 10
+
+logging:
+  project: DivPolicy
+  resume: True
+  mode: online
+  name: ${now}_${task_name}
+  tags: ["${task_name}", "${exp_name}"]
+  id: null
+  group: null
+  
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: ${dataset_dir}/sampler/${now}_${task_name}
+  sweep:
+    dir: ${dataset_dir}/sampler/${now}_${task_name}
+    subdir: ${hydra.job.num}

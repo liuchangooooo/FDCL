@@ -1,0 +1,104 @@
+[package]
+name = "linuxdo-accelerator"
+version = "0.1.12"
+edition = "2024"
+build = "build.rs"
+authors = ["fjh1997 <549308442@qq.com>"]
+license = "MIT"
+description = "Native Rust linux.do accelerator with CLI and desktop shell"
+
+[package.metadata.packager]
+product-name = "Linux.do Accelerator"
+identifier = "io.linuxdo.accelerator"
+out-dir = "./dist"
+binaries-dir = "./target/release"
+formats = ["deb", "dmg", "nsis"]
+before-packaging-command = "cargo build --release --bin linuxdo-accelerator"
+publisher = "linux.do"
+description = "Native Rust linux.do accelerator desktop app"
+long-description = """
+A native Rust linux.do accelerator with one unified executable.
+The same binary supports desktop GUI and CLI modes depending on the command-line arguments.
+"""
+category = "DeveloperTool"
+icons = ["assets/icons/linuxdo.ico", "assets/icons/*.png"]
+
+[[package.metadata.packager.binaries]]
+path = "linuxdo-accelerator"
+main = true
+
+[package.metadata.packager.linux]
+generate-desktop-entry = true
+
+[package.metadata.packager.macos]
+signing-identity = "-"
+
+[package.metadata.packager.dmg]
+background = "assets/dmg/background.png"
+window-size = { width = 720, height = 460 }
+app-position = { x = 160, y = 220 }
+application-folder-position = { x = 560, y = 220 }
+
+[package.metadata.packager.deb]
+section = "utils"
+package-name = "linuxdo-accelerator"
+desktop-template = "packaging/linux/linuxdo-accelerator.desktop.hbs"
+depends = ["libgtk-3-0", "libxdo3"]
+
+[package.metadata.packager.nsis]
+installer-mode = "perMachine"
+installer-icon = "assets/icons/linuxdo.ico"
+
+[dependencies]
+anyhow = "1"
+bytes = "1"
+clap = { version = "4", features = ["derive"] }
+directories = "6"
+http = "1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["server", "server-auto", "http1", "http2", "tokio"] }
+libc = "0.2"
+rcgen = "0.12"
+reqwest = { version = "0.12", default-features = false, features = ["http2", "rustls-tls"] }
+rustls = { version = "0.23", features = ["ring"] }
+rustls-pemfile = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio-rustls = "0.26"
+toml = "0.8"
+time = { version = "0.3", default-features = false, features = ["std"] }
+x509-parser = "0.16"
+md5 = "0.7"
+fontdb = "0.23"
+
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts"] }
+tray-icon = "0.19"
+winit = "0.30"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+tray-icon = "0.19"
+gtk = "0.18"
+
+[target.'cfg(windows)'.dependencies]
+raw-window-handle = "0.6"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[build-dependencies]
+winresource = "0.1"
+
+[patch.crates-io]
+egui-winit = { path = "vendor/egui-winit" }

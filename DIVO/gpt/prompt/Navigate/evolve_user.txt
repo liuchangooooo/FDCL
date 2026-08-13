@@ -1,0 +1,18 @@
+We trained a Navigation policy using the pillar generator shown below, and tracked policy performance over the latest training batch:
+
+{policy_statistics}
+
+{feedback_evidence}
+
+{current_generator_context}
+
+Please carefully analyze the evidence above and provide a new, improved replacement pillar generation function for the next training stage. Use the current code only as reference. The returned function should replace the previous generator entirely, not patch or accumulate old modes from it. You should pay attention to which pillar configurations the policy successfully learned and which configurations it struggled with. The goal of the generator is to balance difficulty, feasibility, and diversity so that the policy can learn and perform better under pillar uncertainty.
+
+Please follow the guidelines below:
+- Treat the structured evidence above as the primary design signal. In skill-signal mode, use the skill-library probe state and design objective to decide whether the generator should be hardened, eased, diversified, or left near the current difficulty.
+- Do not infer a hard harder/easier rule from the deployed success_rate alone; use it only as background context.
+- Keep the pillar count and pillar size fixed. Revise only the placement distribution, spatial relationships, and stochastic layout families.
+
+Again, please be creative when designing the pillar distribution. Keep the generator stochastic and diverse across calls, but use the evidence above to decide what distributional structure should change. Avoid making only generic coordinate noise.
+
+{evolution_request}

@@ -1,0 +1,117 @@
+% =============================================================
+%  方法节(Route B · CoEvolve 三阶段结构 · 中文)
+%  编译:XeLaTeX(中文用 ctex;数学 amsmath;表 booktabs;算法 algorithm+algpseudocode)
+%  可整体编译,或把 \section{方法} ... 段落抽入主文件。
+%  引用为占位 \cite{...},需在 references.bib 补齐:
+%    divo(DIVO)、eurekaverse(EurekaVerse)、coevolve(CoEvolve)、
+%    curricullm(CurricuLLM, arXiv:2409.18382)、sfl(SFL)
+% =============================================================
+\documentclass[11pt,a4paper,fontset=noto]{ctexart}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{natbib}  % 新增这一行
+\usepackage{hyperref}
+\usepackage{natbib}
+
+% ---- 语义宏(与正文术语一致) ----
+\newcommand{\feasible}{\mathrm{feasible}}
+\newcommand{\realized}{\mathrm{realized}}
+\newcommand{\lv}{\mathrm{lv}}
+\newcommand{\bcount}{\mathrm{boundary\_count}}
+\newcommand{\Wprobe}{W_{\mathrm{probe}}}
+
+\begin{document}
+
+\section{方法}
+\label{sec:method}
+
+我们提出技能库--障碍分布互演化框架 SLC(Skill-Library Curriculum):部署策略与其训练所用的障碍分布通过交互反馈联合更新,无需人工设计障碍。第~\ref{subsec:stage1} 节给出策略在生成器诱导分布上的训练、并从技能库 rollout 中抽取可学性信号;第~\ref{subsec:stage2} 节说明如何以该信号为条件提示 LLM 重写障碍生成器;第~\ref{subsec:stage3} 节描述对候选生成器的行为级验证与分布更新,闭合互演化环路。总体框架见图2\。
+
+\subsection{训练与技能库信号抽取(Stage 1)}
+\label{subsec:stage1}
+
+\paragraph{在生成器诱导分布上训练部署策略。}
+DIVO 隐变量策略 $\pi$ 由编码器 $E(o)\!\to\! z$ 与解码器 $D(s,z,w)\!\to\! a$ 实例化~\citep{divo}。其中 $z=E(o)$ 为情形编码,是解码器接收障碍信息的唯一通道;$w$ 为本文新增的技能码,取自常量码本 $\{w_0,w_1,\dots,w_K\}$(第一版为 one-hot 且不参与梯度)。二者正交:固定障碍情形($z$ 不变)下,不同 $w$ 诱导不同解法。部署严格单技能、单阶段,固定使用部署技能 $w_0$,即 $a=D(s,E(o),w_0)$,与标准 DIVO 逐条可比。
+
+第 $t$ 轮维护一个障碍生成器程序 $g_t$。训练场景 $e=(s_0,O)$ 从 $g_t$ 动态采样:先无难度约束地随机采起点 $s_0$(仅排除与目标重叠的中心区),再由 $g_t$ 依起点与目标放置障碍 $O=g_t(s_0)$,并做物理合法性校验(在界内、不与起点或目标碰撞、无初始接触)。TD3 梯度只沿部署路径 $z=E(o)$、$w_0$ 回传,课程因而直接塑造单阶段部署策略;探针技能 $w_1,\dots,w_K$ 与 $w_0$ 共享解码器,各自在其 rollout 上被训练。新生成器一经验证接受,训练分布 $\mathcal{D}_t\sim g_t$ 即随策略共同演化。
+
+\paragraph{从技能库抽取可学性信号。}
+单一确定性策略在给定场景上的成败是二元的:逐场景成功率 $p\in\{0,1\}$,故 SFL 式学习价值 $p(1-p)$ 恒为零,对零样本确定性策略退化失效。我们以一族技能恢复非退化信号。固定探针技能库 $\Wprobe=\{w_1,\dots,w_K\}$(不含部署技能 $w_0$),将各 $w_k$ 注入解码器在同一场景 rollout,记成败 $\rho(\pi,e,w_k)\in\{0,1\}$,对场景 $e$ 定义
+\begin{align}
+\feasible(e) &= \max_k \rho(\pi,e,w_k), \label{eq:feasible}\\
+\realized(e) &= \frac{1}{K}\sum_{k} \rho(\pi,e,w_k), \label{eq:realized}\\
+\lv(e) &= \realized(e)\,\bigl(1-\realized(e)\bigr). \label{eq:lv}
+\end{align}
+$\feasible$ 表示是否存在技能能解,$\realized$ 表示能解技能的比例,$\lv$ 为逐场景可学性,在 $\realized\!\approx\!0.5$ 处取最大。据此把每个场景归入三类:\emph{infeasible}($\feasible=0$,全库皆不能解)、\emph{mastery}($\realized\ge\eta$,已被库中多数技能掌握)、\emph{boundary}($\feasible=1$ 且 $\realized<\eta$,部分技能能解、部分失败)。boundary 即可学习带,是课程要锁定并放大的目标。
+
+这一信号定义在技能库而非单一策略上,是本方法与既有 LLM 课程反馈的关键区别。CoEvolve 从单一(随机)智能体的 $K$ 条轨迹判定边界~\citep{coevolve};对确定性零样本策略,这类单策略反馈无法给出连续刻度。本文的 $K$ 个成败来自同一确定性策略下 $K$ 个已训练的技能,因而对部署策略给出语义正确、可排序的连续难度,并区分两种在单策略反馈下无法分辨的情形:不可解($\realized=0$)与可行但难($0<\realized<1$)。对从 $g_t$ 采样的 $M$ 个临时场景聚合,得到 $\realized$、$\lv$、boundary 占比等画像,并按 $\realized$ 排序暴露 focus(最接近前沿)、harden(已偏易)、avoid(不可解)三组示例。
+
+\subsection{信号引导的生成器重写(Stage 2)}
+\label{subsec:stage2}
+
+\paragraph{构造信号条件的上下文。}
+由第~\ref{subsec:stage1} 节的技能库画像 $S(g_t)$ 构造结构化上下文,包含 $\realized$ 分布统计、focus/harden/avoid 示例,以及由前沿判定导出的唯一进化方向:$r_{\mathrm{hard}}$ 偏高时取 RELAX(把过难场景移入可学带),$r_{\mathrm{easy}}$ 偏高时取 HARDEN(把过易场景移入可学带),否则取 PRESERVE\_AND\_DIVERSIFY(保持难度、改变结构布局以扩大覆盖);合法率过低时前置 FIX\_VALIDITY。信号定义、上下文构造与第~\ref{subsec:stage3} 节的验收共用同一次技能库探针评估、同一组固定起点与同一 $K$,以保证给 LLM 的方向与验收基准严格同源。
+
+\paragraph{LLM 重写生成器程序。}
+以上述上下文为条件,提示 LLM 重写的对象是生成器程序 $g_t$ 本身,而非单张布局;在代码层修改使一次改动可跨不同起点泛化。EurekaVerse 亦在代码层迭代地形生成器~\citep{eurekaverse},但其反馈为单策略成败;本文的反馈是技能库可学性。一轮内采样 $R$ 个候选程序 $\{g'^{(1)},\dots,g'^{(R)}\}$,每个候选先过代码 sanity(可执行、含指定函数与签名、可复现、超时受限、禁危险导入、不改动环境或奖励或成功判据或策略),且不改动持久生成器。其目标是把场景分布推向可学带,在保持可解的前提下扩大布局与技能覆盖:
+\begin{equation}
+g_{t+1} \approx \arg\max_{g}\ \mathbb{E}_{e\sim g}\bigl[\lv(e)\bigr],
+\quad \text{s.t.}\quad \mathbb{E}_{e\sim g}\bigl[\mathbf{1}(\feasible(e)=0)\bigr] \le \tau_{\mathrm{inf}}.
+\label{eq:objective}
+\end{equation}
+
+\subsection{候选验证与分布演化(Stage 3)}
+\label{subsec:stage3}
+
+第~\ref{subsec:stage2} 节为当前生成器 $g_t$ 产出 $R$ 个候选程序 $\{g'^{(1)},\dots,g'^{(R)}\}$。本阶段从 $\{g_t\}\cup\{\text{候选}\}$ 中选出最能把训练分布锁在可学带的生成器 $g_{t+1}$,并将其并入训练分布,闭合技能库与障碍分布的互演化环路。既有 LLM 课程用基于策略表现的选择完成这一步:CurricuLLM 让评估 LLM 读各候选策略的轨迹统计、挑出最贴合子任务描述的策略~\citep{curricullm};EurekaVerse 以协同进化保留策略当前能部分求解的环境、并把表现回灌下一代生成~\citep{eurekaverse}。二者的选择量都来自单一策略的成败。本文改用技能库可学性作为选择量,并以单标量、无死锁的判据完成选择与验收。
+
+\paragraph{基于 rollout 的配对验证。}LLM 的修改是提议而非保证，采纳前须做行为级检验，区别于几何检验或 LLM 自洽检验。在同一组固定起点与同一探针库 $\Wprobe$ 上，对 $g_t$ 与全部候选做配对探测（严格 paired，消除起点与技能差异带来的方差），以各自的边界样本数作为单一标量打分，其定义为：
+\begin{equation}
+\bcount = \#\{\, i : \tau < \realized(e_i) < 1-\tau \,\}
+\end{equation}
+并列时以平均 $\lv$ 打破，不引入复合权重。验收判据分三步：
+
+\begin{itemize}
+  \item \textbf{绝对硬门}只筛 LLM 候选，不与 $g_t$ 比、不合取：$\text{code\_pass}$ 且 $\text{valid\_rate} \ge v_{\min}$ 且 $\text{duplicate\_rate} \le d_{\max}$；boundary 相关量不作硬门。当前 $g_t$ 始终作为 incumbent 参选。
+  \item \textbf{含 $g_t$ 的单标量 argmax 与计数净改进}：在 $\{g_t\}\cup\{\text{过门候选}\}$ 上取 argmax，替换条件为
+  \[
+  \bcount(\text{cand}) \ge \bcount(g_t) + \delta
+  \]
+  否则保持 $g_t$。
+  \item \textbf{对称饱和逃逸}：当库把当前生成器学透，即过难（$r_{\mathrm{hard}} \ge r_{\mathrm{hard}}^{\max}$）或过易（$r_{\mathrm{easy}} \ge r_{\mathrm{easy}}^{\max}$），令 $g_t$ 不再阻塞替换，在过门候选中按 $\bcount$ 另择最优，分别对应 RELAX 与 HARDEN 逃逸；无候选过门则保持 $g_t$。
+\end{itemize}
+该单标量设计从结构上消除既有多轴非降合取验收在课程成熟期的棘轮死锁。三处同时断链:单标量恒有 argmax;硬门是绝对下限而非“优于 $g_t$”;库学透即触发饱和逃逸强制调整难度。整个选择过程见算法~\ref{alg:select}。
+
+\begin{algorithm}[t]
+\caption{生成器候选选择(单标量、无死锁)}
+\label{alg:select}
+\begin{algorithmic}[1]
+\Require 当前生成器 $g_t$;探针库 $\Wprobe$;固定起点集 $S$;候选数 $R$、净改进阈值 $\delta$、饱和阈 $r_{\mathrm{hard}}^{\max},r_{\mathrm{easy}}^{\max}$
+\State $\{g'^{(1)},\dots,g'^{(R)}\}\sim \text{LLM\_rewrite}(g_t, S(g_t))$ \Comment{Stage 2 产出}
+\ForAll{$c \in \{g_t, g'^{(1)},\dots,g'^{(R)}\}$} \Comment{同一 $\Wprobe$、同一 $S$ 配对探测}
+  \State $b_c \gets \bcount(c)$;\quad $\text{pass}_c \gets \text{hard\_gate}(c)$
+\EndFor
+\State $\textit{saturated} \gets \bigl(r_{\mathrm{hard}}(g_t)\ge r_{\mathrm{hard}}^{\max}\bigr) \lor \bigl(r_{\mathrm{easy}}(g_t)\ge r_{\mathrm{easy}}^{\max}\bigr)$
+\State $\mathcal{C}\gets \{\, c\in\text{候选} : \text{pass}_c \,\}$ \Comment{通过硬门的候选池}
+\If{$\textit{saturated}$}
+  \State $g_{t+1}\gets \arg\max_{c\in\mathcal{C}} b_c$ \Comment{饱和逃逸,$g_t$ 不阻塞}
+\ElsIf{$\max_{c\in\mathcal{C}} b_c \ge b_{g_t} + \delta$}
+  \State $g_{t+1}\gets$ 对应 $\arg\max$
+\Else
+  \State $g_{t+1}\gets g_t$ \Comment{reject-and-hold}
+\EndIf
+\Ensure 下一轮生成器 $g_{t+1}$
+\end{algorithmic}
+\end{algorithm}
+
+\paragraph{更新训练分布。}
+$g_{t+1}$ 一经确定,训练即从 $g_{t+1}$ 动态采样并继续,直至下一次触发;随后回到第~\ref{subsec:stage1} 节重新抽取信号,如此迭代地抽取信号、重写生成器、验证、并入分布,使技能库与障碍分布联合演化。与 CurricuLLM 把选中策略归档为下一子任务的预训练模型不同~\citep{curricullm},本文更新的是训练分布(生成器 $g_{t+1}$)而非策略池,策略始终沿部署路径连续训练。探针库仅作为筛选“该练什么”的镜头,从不被部署;部署固定 $w_0$,评测因而停在 stage-1 裸部署层,与标准 DIVO 逐条可比,无需其 stage-2/3。
+
+% \bibliographystyle{plainnat}
+% \bibliography{references}
+\end{document}

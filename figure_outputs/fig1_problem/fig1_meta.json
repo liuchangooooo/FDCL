@@ -1,0 +1,60 @@
+{
+  "checkpoint": "/home/hnu-w/DIVO/data/outputs/2026.06.22_g0_skill_signal_evolve_s0_clean/checkpoints/best430k.pt",
+  "K": 6,
+  "mastered": {
+    "realized": 0.8333333333333334,
+    "succ": [
+      1,
+      1,
+      1,
+      0,
+      1,
+      1
+    ],
+    "start": [
+      0.06928287040725803,
+      0.17525597171773516,
+      5.612894159330522
+    ],
+    "obstacles": [
+      {
+        "x": 0.17,
+        "y": 0.17,
+        "purpose": "corner anchor"
+      },
+      {
+        "x": 0.11368877096722775,
+        "y": 0.056378686527892415,
+        "purpose": "side pressure"
+      }
+    ]
+  },
+  "boundary": {
+    "realized": 0.5,
+    "succ": [
+      1,
+      0,
+      1,
+      0,
+      1,
+      0
+    ],
+    "start": [
+      0.11512106226466223,
+      0.025662508766912062,
+      5.5361820481247355
+    ],
+    "obstacles": [
+      {
+        "x": 0.06,
+        "y": -0.17,
+        "purpose": "edge presence"
+      },
+      {
+        "x": -0.17,
+        "y": 0.0,
+        "purpose": "edge presence"
+      }
+    ]
+  }
+}

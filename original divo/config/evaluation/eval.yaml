@@ -1,0 +1,49 @@
+defaults:
+  - _self_
+  - override hydra/hydra_logging: disabled  
+  - override hydra/job_logging: disabled
+_target_: evaluation.Evaluator
+
+name: eval
+task_name: evaluation
+exp_name: run1
+
+device: "cuda:0"
+max_steps: 10
+num_episodes: 10
+num_render: 10
+seed: 0
+
+output_dir: data/outputs/2025.05.20/23.45.44_td3_pusht_mujuco_obstacle/evaluation
+
+env:
+  _target_: pusht_mujoco
+  obstacle: True
+  obstacle_num: 3
+  obstacle_size: 0.03 #default 0.03 big 0.05 unstructured 0.08
+  obstacle_shape: box #box, sphere, unstructured
+  obstacle_dist: random #random, aroundT, between, random_step
+  action_scale: 4
+  NUM_SUBSTEPS: 5
+  action_dim: [6, ]
+  obs_dim: [6, ]
+  action_reg: True
+  reg_coeff: 1.0
+  generate_dataset: False
+  motion_pred: False
+  eval : True
+  dynamics_randomization : False
+
+sampler:
+  checkpoint: data/outputs/2025.05.20/23.45.44_td3_pusht_mujuco_obstacle/sampler/2025.05.21.15.28.55_FlowSampler/flowmodel_epoch=140_valloss=0.8543.pt
+
+motion_decoder:
+  checkpoint: data/outputs/2025.05.20/23.45.44_td3_pusht_mujuco_obstacle/motion_decoder/2025.05.21.18.32.02_TCNMotionDecoder/tcn_epoch=600_valloss=0.0005.pt
+  
+policy:
+  checkpoint: data/outputs/2025.05.20/23.45.44_td3_pusht_mujuco_obstacle/checkpoints/model_latest.pt
+
+hydra:  
+  output_subdir: null  
+  run:  
+    dir: .

@@ -1,0 +1,28 @@
+{
+  "success_rate": 0.8333333333333334,
+  "mean_reward": -1.945267023086742,
+  "num_episodes": 12,
+  "max_steps": 10,
+  "env": {
+    "_target_": "pusht_mujoco",
+    "obstacle": true,
+    "obstacle_num": 1,
+    "obstacle_size": 0.05,
+    "obstacle_shape": "box",
+    "obstacle_dist": "random",
+    "action_scale": 4,
+    "NUM_SUBSTEPS": 5,
+    "action_dim": [
+      6
+    ],
+    "obs_dim": [
+      6
+    ],
+    "action_reg": true,
+    "reg_coeff": 1.0,
+    "generate_dataset": false,
+    "motion_pred": false,
+    "eval": true,
+    "dynamics_randomization": false
+  }
+}

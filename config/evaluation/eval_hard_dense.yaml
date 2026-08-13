@@ -1,0 +1,85 @@
+defaults:
+  - _self_
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+
+_target_: evaluation.Evaluator
+
+name: eval_hard_dense
+task_name: evaluation_hard_dense
+exp_name: final_policy_only_hard_dense
+
+mode: policy_only
+
+device: "cuda:0"
+max_steps: 10
+num_episodes: 100
+num_render: 0
+reward: last
+seed: 0
+
+output_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_eval_hard_dense
+
+env:
+  _target_: pusht_mujoco
+  obstacle: True
+  obstacle_num: 1
+  obstacle_size: 0.03
+  obstacle_shape: box
+  obstacle_dist: random
+  action_scale: 4
+  NUM_SUBSTEPS: 5
+  action_dim: [6, ]
+  obs_dim: [6, ]
+  action_reg: True
+  reg_coeff: 1.0
+  generate_dataset: False
+  motion_pred: False
+  eval: True
+  dynamics_randomization: False
+
+# Dense OOD families (training = num2/size0.01/between), increasing obstacle count.
+benchmarks:
+  enabled: True
+  order: [BIG2, BIG3, DEN5, DEN6]
+
+  BIG2:
+    env_overrides:
+      obstacle_num: 2
+      obstacle_size: 0.10
+      obstacle_shape: box
+      obstacle_dist: random
+
+  BIG3:
+    env_overrides:
+      obstacle_num: 3
+      obstacle_size: 0.08
+      obstacle_shape: box
+      obstacle_dist: random
+
+  DEN5:
+    env_overrides:
+      obstacle_num: 5
+      obstacle_size: 0.05
+      obstacle_shape: box
+      obstacle_dist: random
+
+  DEN6:
+    env_overrides:
+      obstacle_num: 6
+      obstacle_size: 0.05
+      obstacle_shape: box
+      obstacle_dist: random
+
+sampler:
+  checkpoint: None
+motion_decoder:
+  checkpoint: None
+
+policy:
+  checkpoint: PLACEHOLDER
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .

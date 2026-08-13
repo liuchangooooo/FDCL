@@ -116,10 +116,10 @@ curriculum:
       tau_saturation: 0.125         # boundary 带 τ<p<1−τ(K=4)
       target_delta: 0.15            # 近 0.5 判定(仅诊断)
       exclude_invalid_from_boundary: true   # Edit-1 已开启:把无效场景(固定起点摆不出合法布局)从 boundary 统计剔除,只计入 valid_rate,避免"生成器无效"被当成"库解不开"(修 r_hard 虚高/误 RELAX/mean_b 稀释)
-      # PRESERVE_AND_DIVERSIFY 换代(点2/点3,默认关=旧 hold 行为):
+      # PRESERVE_AND_DIVERSIFY 换代(点2/点3,关闭时=旧 hold 行为):
       # would-be hold(未饱和、无 boundary 净改进)时,不冻住 G_t,而是换一个
       # 等难度(bc>=cur-tolerance、r_easy 不更高)的新结构候选,让训练分布持续多样化而不变易。
-      diversify_on_hold: false          # 点2 总开关
+      diversify_on_hold: true           # 点2 总开关
       diversify_bc_tolerance: 2         # 等难度容差(boundary_count 不低于 cur-此值)
       diversify_prefer_lower_easy: false # 点3:r_easy 偏高时,等难度里偏好更低 r_easy(温和回拉)
       diversify_r_easy_soft: 0.5        # 点3 仅当 cur r_easy > 此软阈值才生效

@@ -1,0 +1,177 @@
+defaults:
+  - _self_
+_target_: DIVO.workspace.rl_workspace.td3_workspace.TD3Workspace
+
+name: train
+task_name: td3_pusht_mujuco_obstacle
+exp_name: run1
+
+latent_dim: 3
+obs_dim: 6
+state_dim: 4
+action_size: 6
+statelatent_dim : 7
+obsaction_dim: 12
+
+max_steps : 10
+NUM_SUBSTEPS: 25 #2s/NUM_SUBSTEPS = control time
+action_scale: 4 #limit action around T block
+device: "cuda:0"
+
+
+env:
+  _target_: pusht_mujoco
+  obstacle: True
+  obstacle_num: 1
+  obstacle_size: 0.01
+  obstacle_shape: box #box, sphere
+  obstacle_dist: random #random, aroundT, between
+  action_scale: ${action_scale}
+  NUM_SUBSTEPS: ${NUM_SUBSTEPS}
+  action_dim: [6, ]
+  obs_dim: [6, ]
+  action_reg: True
+  reg_coeff: 1.0
+  dynamics_randomization: True
+
+no_obs_env:
+  _target_: pusht_mujoco
+  obstacle: False
+  obstacle_size: 0.01
+  obstacle_dist: random #random, aroundT, between
+  action_scale: ${action_scale}
+  NUM_SUBSTEPS: ${NUM_SUBSTEPS}
+  action_dim: [6, ]
+  obs_dim: [6, ]
+  action_reg: True
+  reg_coeff: 1.0
+
+unseen_env:
+  _target_: pusht_mujoco
+  obstacle: True
+  obstacle_size: 0.05
+  obstacle_dist: random #random, aroundT, between
+  action_scale: ${action_scale}
+  NUM_SUBSTEPS: ${NUM_SUBSTEPS}
+  action_dim: [6, ]
+  obs_dim: [6, ]
+  action_reg: True
+  reg_coeff: 1.0
+
+policy:
+  _target_: ldpi
+  encoder_net:
+    _target_: fc_vec
+    in_chan: ${obs_dim}
+    out_chan: ${latent_dim}
+    l_hidden: [512, 512, 512]
+    activation: ['relu', 'relu', 'relu']
+    out_activation: 'linear'
+  decoder_net:
+    _target_: fc_vec
+    in_chan: ${statelatent_dim}
+    out_chan: ${action_size}
+    l_hidden: [512, 512, 512]
+    activation: ['relu', 'relu', 'relu']
+    out_activation: 'tanh'
+
+critic:
+  _target_: mcritic
+  n_critics: 2
+  net0: 
+    _target_: fc_vec
+    in_chan: ${obsaction_dim}
+    out_chan: 1
+    l_hidden: [512, 512, 512]
+    activation: ['relu', 'relu', 'relu']
+    out_activation: 'linear'
+  net1:
+    _target_: fc_vec
+    in_chan: ${obsaction_dim}
+    out_chan: 1
+    l_hidden: [512, 512, 512]
+    activation: ['relu', 'relu', 'relu']
+    out_activation: 'linear'
+
+evaluator:
+  _target_: mujoco_pusht
+  output_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${task_name}/log
+  num_episodes: 20
+  max_steps: ${max_steps}
+  device: ${device}
+  num_save_video: 3
+  reward: last
+
+rl:
+  replay_buffer_size: 1000000
+  batch_size : 64
+  warmup : 100
+  gamma : 0.9
+  critic_gradient_clip : False
+  critic_gradient_max_norm : 1
+  policy_gradient_clip : False
+  policy_gradient_max_norm : 1
+  add_noise: True
+  noise_sigma : 0.2
+  noise_epsilon : 5000
+  soft_update_tau : 0.001
+  policy_update : 1 # policy update per n critic update
+
+optimizer:
+  _target_: torch.optim.AdamW
+  betas:
+  - 0.95
+  - 0.999
+  eps: 1.0e-08
+  lr: 0.0001
+  weight_decay: 1.0e-06
+  
+critic_optimizer:
+  _target_: torch.optim.AdamW
+  betas:
+  - 0.95
+  - 0.999
+  eps: 1.0e-08
+  lr: 0.0001
+  weight_decay: 1.0e-06
+
+training:
+  num_epochs: 1000000
+  device: ${device}
+  seed: 42
+  checkpoint_every: 10000
+  validate: true
+  validate_steps: 5000
+  n_env_validate : 20
+  regularize_z: gaussian # norm, gaussian, False
+  reg_coeff: 1.0
+
+log : True
+log_interval: 500
+
+logging:
+  project: DivPolicy
+  resume: True
+  mode: online
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${task_name}
+  tags: ["${task_name}", "${exp_name}"]
+  id: null
+  group: null
+
+checkpoint:
+  topk:
+    monitor_key: test_mean_score
+    mode: max
+    k: 10 # save top k checkpoints
+    format_str: 'epoch={epoch:04d}-test_mean_score={test_mean_score:.3f}.ckpt'
+  save_last_ckpt: True
+  save_last_snapshot: False
+  
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${task_name}
+  sweep:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${task_name}
+    subdir: ${hydra.job.num}

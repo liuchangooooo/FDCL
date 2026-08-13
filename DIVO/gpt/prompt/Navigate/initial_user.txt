@@ -1,0 +1,17 @@
+Generate an initial Navigation pillar generator.
+
+No policy feedback is available yet, so the initial distribution should be easy-to-medium, solvable, and diverse rather than maximally difficult.
+
+Example start position for reasoning:
+- Point-agent start: x={sx:.3f}, y={sy:.3f}
+- Goal position: x={gx:.3f}, y={gy:.3f}
+
+Initial generator requirements:
+- Use randomized but structured pillar sampling.
+- Preserve feasible space near the Point-agent start and the goal.
+- Avoid layouts that completely block all navigation routes.
+- Avoid placing pillars directly on top of the Point agent or goal.
+- Reject unsafe candidates and keep sampling until exactly `num_pillars` valid pillars are returned.
+- If random sampling fails, use a conservative valid fallback.
+
+Write the complete initial generator function now.

@@ -25,7 +25,7 @@ def _load_template(path: str) -> str:
 
 
 _AGGREGATE_KEYS = ("success", "collision", "timeout", "fall")
-_SKILL_FEEDBACK_MODES = ("skill_signal", "boundary_skill", "ours")
+_SKILL_FEEDBACK_MODES = ("skill_signal", "boundary_skill", "ours", "skill_library")
 # Matches the verifier's infeasible cap; used only to steer the prompt direction
 # (the verifier remains the hard gate).
 _SKILL_INFEASIBLE_CAP = 0.30
@@ -78,6 +78,10 @@ class PromptBuilder:
     def load_evolve_system(self) -> str:
         return _load_template(os.path.join(self.task_prompt_dir, "evolve_system.txt"))
 
+    def load_evolve_user(self) -> str:
+        """Load the raw evolve-user template without rendering evidence."""
+        return self._load_evolve_user_template()
+
     def _load_evolve_user_template(self) -> str:
         return _load_template(os.path.join(self.task_prompt_dir, "evolve_user.txt"))
 
@@ -102,17 +106,32 @@ class PromptBuilder:
         name = self.task_name.lower()
         if "ant" in name:
             return "antmaze"
+        if "nav" in name:
+            return "navigate"
         return "pusht"
 
     def _generator_signature(self) -> str:
-        if self._task_kind() == "antmaze":
+        kind = self._task_kind()
+        if kind == "antmaze":
             return "def generate_maze_map(seed: int = None) -> list:"
+        if kind == "navigate":
+            return "def generate_pillars(agent_start: np.ndarray, goal: np.ndarray, num_pillars: int) -> list:"
         return "def generate_obstacles(tblock_pose: np.ndarray, num_obstacles: int) -> list:"
 
     def _generator_name(self) -> str:
-        if self._task_kind() == "antmaze":
+        kind = self._task_kind()
+        if kind == "antmaze":
             return "generate_maze_map"
+        if kind == "navigate":
+            return "generate_pillars"
         return "generate_obstacles"
+
+    def build_initial_user_nav(self, agent_start: np.ndarray, goal: np.ndarray) -> str:
+        """导航版 initial_user:填充 {sx}{sy}{gx}{gy}。"""
+        template = self.load_initial_user()
+        sx, sy = float(agent_start[0]), float(agent_start[1])
+        gx, gy = float(goal[0]), float(goal[1])
+        return template.format(sx=sx, sy=sy, gx=gx, gy=gy)
 
     def _as_dict(self, value: Any) -> Dict[str, Any]:
         if value is None:
@@ -228,12 +247,20 @@ class PromptBuilder:
     # ================================================================
 
     def _format_task_objective_block(self) -> str:
-        if self._task_kind() == "antmaze":
+        kind = self._task_kind()
+        if kind == "antmaze":
             lines = [
                 "Task objective:",
                 "- Robot task: train an Ant policy to navigate from reset/start to goal in generated maze layouts.",
                 "- Generator role: define training maze distributions only; do not alter policy, reward, simulator, start, or goal semantics.",
                 "- Revision target: executable maze-layout code that remains solvable while exposing useful navigation uncertainty.",
+            ]
+        elif kind == "navigate":
+            lines = [
+                "Task objective:",
+                "- Robot task: train a Navigation policy to move the Point agent from sampled starts to fixed goal (+0.65, 0.0).",
+                "- Generator role: sample pillar layouts for training only; do not alter policy, reward, simulator, goal, pillar count, or pillar size.",
+                "- Revision target: executable pillar-generator code that remains solvable while exposing useful pillar uncertainty.",
             ]
         else:
             lines = [
@@ -256,6 +283,11 @@ class PromptBuilder:
         success_rate = counts["success"] / total
         failure_rate = 1.0 - success_rate
         dominant = self._dominant_failure_group(counts)
+        labels = {key: key for key in _AGGREGATE_KEYS}
+        if self._task_kind() == "navigate":
+            labels["fall"] = "out_of_bounds"
+            if dominant == "fall":
+                dominant = "out_of_bounds"
         difficulty_guidance = self._format_difficulty_guidance(reason, success_rate)
 
         if feedback_mode == "coarse":
@@ -265,7 +297,7 @@ class PromptBuilder:
                 f"- failure_rate: {failure_rate:.3f}",
                 "- termination_distribution: "
                 + ", ".join(
-                    f"{key}={counts[key]} ({counts[key] / total:.1%})"
+                    f"{labels[key]}={counts[key]} ({counts[key] / total:.1%})"
                     for key in _AGGREGATE_KEYS
                 ),
                 f"- dominant_failure_group: {dominant}",
@@ -278,7 +310,7 @@ class PromptBuilder:
                 f"- success_rate={success_rate:.3f}, failure_rate={failure_rate:.3f}, "
                 f"n_episodes={total}, dominant_failure_group={dominant}, "
                 f"counts={{success:{counts['success']}, collision:{counts['collision']}, "
-                f"timeout:{counts['timeout']}, fall:{counts['fall']}}}"
+                f"timeout:{counts['timeout']}, {labels['fall']}:{counts['fall']}}}"
             ),
         ]
         # In skill-library modes the design direction comes from the skill-library
@@ -606,6 +638,9 @@ class PromptBuilder:
         return "\n".join(lines)
 
     def _format_revision_request_block(self, feedback_mode: str) -> str:
+        is_nav = self._task_kind() == "navigate"
+        item = "pillar" if is_nav else "obstacle"
+        start = "Point-agent start" if is_nav else "start pose"
         lines = [
             f"Return exactly one complete fenced Python code block defining `{self._generator_name()}`.",
         ]
@@ -620,13 +655,13 @@ class PromptBuilder:
             lines.append("Use the failure-conditioned scene-graph pattern evidence as the main feedback signal. The listed patterns were discovered from raw graph-derived layout features using data-adaptive quantile rules; treat them as statistical evidence about which layout structures expose policy weaknesses, not as fixed hand-written obstacle templates.")
             lines.append("If the current stage is too easy, increase the feasible sampling probability of layouts matching high-support, high-lift graph patterns while preserving diversity. If the current stage is too hard, reduce over-concentration on the strongest high-lift patterns or soften them by relaxing their graph-derived conditions. If the stage is balanced, keep similar difficulty but diversify around the discovered patterns instead of collapsing to one mode. Implement these changes in the actual sampling distribution, not only in comments or variable names.")
         elif feedback_mode == "skill_library":
-            lines.append("Use the skill-library boundary probe evidence (W_probe) as the main design signal. p = fraction of the trained library skills w_1..w_K that solve a scene; FOCUS scenes are on the learnable boundary (tau < p < 1-tau) and should be generated more; AVOID scenes are infeasible (no library skill solved them) and should be eased or avoided. Follow the stated difficulty direction and design objective exactly.")
-            lines.append("Rewrite the generator from scratch as a stochastic generator that stays diverse across calls and does not collapse to a single narrow layout; using several distinct layout families is one good way to do this. Do not hard-code the exact listed scenes; generalize them into stochastic obstacle families conditioned on the start pose.")
-            lines.append("Aim for learnable-boundary obstacle families: sometimes solvable by the library, not trivially mastered by all skills, and not unsolvable by every skill. Keep the sampled families diverse and spread across the layout space. Candidate generators are checked by a paired W_probe verifier that scores boundary_count (how many layouts fall in the tau-band) under an absolute physical-validity gate.")
+            lines.append("Use the skill-library boundary probe evidence (W_probe) as the main design signal. p = fraction of the trained library skills w_1..w_K that solve a scene. Follow the stated difficulty direction and its SOURCE/TARGET/GUARD evidence: move source layouts toward the boundary target without crossing into the guarded opposite extreme.")
+            lines.append(f"Rewrite the generator from scratch as a stochastic generator that stays diverse across calls and does not collapse to a single narrow layout; using several distinct layout families is one good way to do this. Do not hard-code the exact listed scenes; generalize them into stochastic {item} families conditioned on the {start}.")
+            lines.append(f"Aim for learnable-boundary {item} families: sometimes solvable by the library, not trivially mastered by all skills, and not unsolvable by every skill. Keep the sampled families diverse and spread across the layout space. Candidate generators are checked by a paired W_probe verifier that scores boundary_count (how many layouts fall in the tau-band) under an absolute physical-validity gate.")
         elif feedback_mode in ("skill_signal", "boundary_skill", "ours"):
             lines.append("Use the skill-library probe evidence as the main design signal. FOCUS scenes are on the learnable boundary (some injected skills solve them, some fail) and should be generated more; AVOID scenes are infeasible (no injected skill solved them) and should be eased or avoided. Follow the stated difficulty state and design objective.")
-            lines.append("Rewrite the generator from scratch as a stochastic generator that stays diverse across calls and does not collapse to a single narrow layout; using several distinct layout families is one good way to do this. Do not hard-code the exact listed scenes; generalize them into stochastic obstacle families conditioned on the start pose.")
-            lines.append("Aim for learnable-boundary obstacle families: sometimes solvable by the skill library, not trivially mastered by all skills, and not unsolvable by every skill. Keep the sampled families diverse and spread across the layout space. Candidate generators are checked by a paired rollout verifier on feasibility, learnable-band mass, and layout coverage.")
+            lines.append(f"Rewrite the generator from scratch as a stochastic generator that stays diverse across calls and does not collapse to a single narrow layout; using several distinct layout families is one good way to do this. Do not hard-code the exact listed scenes; generalize them into stochastic {item} families conditioned on the {start}.")
+            lines.append(f"Aim for learnable-boundary {item} families: sometimes solvable by the skill library, not trivially mastered by all skills, and not unsolvable by every skill. Keep the sampled families diverse and spread across the layout space. Candidate generators are checked by a paired rollout verifier on feasibility, learnable-band mass, and layout coverage.")
         return "\n".join(lines)
 
     def _format_graph_pattern_block(
@@ -830,21 +865,32 @@ class PromptBuilder:
             f"{self._fmt_float(boundary_signal.get('w0_success_rate', 0.0), 3)}",
         ]
 
-        guidance = {
-            "focus": (
-                "BOUNDARY scenes (tau < p < 1-tau: some library skills solve them, some "
-                "fail). Generate more layout families like these; generalize them into "
-                "stochastic families conditioned on the start pose rather than copying "
-                "exact coords."
-            ),
-            "avoid": (
-                "INFEASIBLE scenes (no library skill solved them). Ease or avoid these so "
-                "at least some skill can solve them; do not concentrate mass here."
-            ),
-        }
-        for key in ("focus", "avoid"):
+        boundary_text = (
+            "BOUNDARY scenes (tau < p < 1-tau) are the target difficulty: some library "
+            "skills solve them and some fail. Generalize their structure rather than "
+            "copying exact coordinates."
+        )
+        if direction == "HARDEN":
+            sections = (
+                ("harden", "SOURCE_EASY", "EASY scenes (p >= 1-tau) should be made harder and moved toward the boundary."),
+                ("focus", "TARGET_BOUNDARY", boundary_text),
+                ("avoid", "GUARD_HARD", "HARD scenes (p <= tau) mark the over-hardening extreme; do not push the new distribution into this region."),
+            )
+        elif direction == "RELAX":
+            sections = (
+                ("avoid", "SOURCE_HARD", "HARD scenes (p <= tau) should be eased and moved toward the boundary, not simply discarded."),
+                ("focus", "TARGET_BOUNDARY", boundary_text),
+                ("harden", "GUARD_EASY", "EASY scenes (p >= 1-tau) mark the over-relaxation extreme; do not make the new distribution trivial."),
+            )
+        elif direction == "PRESERVE_AND_DIVERSIFY":
+            sections = (("focus", "TARGET_BOUNDARY", boundary_text),)
+        else:
+            sections = ()
+            lines.extend(["", "No skill-scene examples are shown while generator validity is being repaired."])
+
+        for key, title, guidance in sections:
             rows = self._as_list(context.get(key))
-            lines.extend(["", f"{key.upper()} - {guidance[key]}"])
+            lines.extend(["", f"{title} - {guidance}"])
             if not rows:
                 lines.append("- none")
                 continue
@@ -859,20 +905,23 @@ class PromptBuilder:
         """Single evolution direction for the boundary block. Prefers the direction
         computed by the workspace (``evolution_direction``); otherwise derives it
         from r_hard / r_easy / valid_rate with the same symmetric thresholds."""
+        is_nav = self._task_kind() == "navigate"
+        item = "pillars" if is_nav else "obstacles"
+        initial_entity = "Point agent" if is_nav else "T-block"
         objectives = {
             "FIX_VALIDITY": (
                 "Too many generated layouts are physically invalid. Fix validity first: "
-                "keep obstacles in-bounds, non-overlapping, and not touching the initial "
-                "T-block, before changing difficulty."
+                f"keep {item} in-bounds, non-overlapping, and not touching the initial "
+                f"{initial_entity}, before changing difficulty."
             ),
             "RELAX": (
                 "The skill library cannot solve too many layouts (r_hard high). Ease the "
                 "structure (reduce blocking, widen gaps) to move layouts from p~0 toward "
-                "the tau-band (p~0.25-0.5). Do not simply delete obstacles."
+                f"the tau-band (p~0.25-0.5). Do not simply delete {item}."
             ),
             "HARDEN": (
                 "The skill library already solves too many layouts (r_easy high). Increase "
-                "structural difficulty using placement and spatial relations only (obstacle "
+                f"structural difficulty using placement and spatial relations only ({item} "
                 "count and size are fixed) to move layouts from p~1 toward the tau-band "
                 "(p~0.5-0.75)."
             ),
@@ -940,6 +989,7 @@ class PromptBuilder:
     ) -> List[str]:
         start = scene.get("start", [])
         obstacles = self._as_list(scene.get("obstacles"))
+        item = "pillar" if self._task_kind() == "navigate" else "obstacle"
         lines = [
             (
                 f"{idx}. scene_id={scene.get('scene_id', 'NA')}, "
@@ -950,17 +1000,17 @@ class PromptBuilder:
             )
         ]
         if obstacles:
-            lines.append("   obstacles:")
+            lines.append(f"   {item}s:")
             for obs_idx, obs_any in enumerate(obstacles, start=1):
                 obs = self._as_dict(obs_any)
                 lines.append(
                     "   - "
-                    f"obs{obs_idx}: x={self._fmt_float(obs.get('x', 0.0), 3)}, "
+                    f"{item}{obs_idx}: x={self._fmt_float(obs.get('x', 0.0), 3)}, "
                     f"y={self._fmt_float(obs.get('y', 0.0), 3)}, "
                     f"purpose={obs.get('purpose', '')}"
                 )
         else:
-            lines.append("   obstacles: []")
+            lines.append(f"   {item}s: []")
 
         if include_behavior and scene.get("behavior_summary"):
             behavior = self._as_dict(scene.get("behavior_summary"))
@@ -1007,9 +1057,17 @@ class PromptBuilder:
         if mode == "coarse":
             return ""
 
-        if mode in ("skill_signal", "boundary_skill", "ours"):
+        if mode in _SKILL_FEEDBACK_MODES:
             if not skill_signal_block:
                 return ""
+            if mode == "skill_library":
+                return (
+                    "We also computed trained skill-library boundary evidence for the "
+                    "current generator. The same W_probe library evaluates each scene, "
+                    "and its cross-skill success distribution determines the evolution "
+                    "direction used below:\n\n"
+                    + skill_signal_block
+                )
             return (
                 "We also computed skill-library probe evidence for the current generator. "
                 "This evidence uses injected latent skills to summarize which generated scenes "

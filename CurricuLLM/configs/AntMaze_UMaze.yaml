@@ -1,0 +1,74 @@
+env_path: "./environments/Curriculum/envs/AntMaze_UMaze_source.py"
+CurriculumCfg:
+  env_id: "Curriculum/AntMaze_UMaze"
+  num_envs: 8
+  num_samples: 3
+  training_alg: "SAC"
+  policy_network: "MultiInputPolicy"
+  eval_freq: 1_000
+  short_training_timesteps: 500_000
+  long_training_timesteps: 5_000_000
+  evaluation_timesteps: 7_000
+
+HerCfg:
+  env_id: "AntMaze_UMaze-v4"
+  num_envs: 16
+  training_alg: "SAC"
+  policy_network: "MultiInputPolicy"
+  eval_freq: 1_000
+  training_timesteps: 13_000_000
+
+SacCfg:
+  env_id: "AntMaze_UMazeDense-v4"
+  num_envs: 16
+  training_alg: "SAC"
+  policy_network: "MultiInputPolicy"
+  training_timesteps: 13_000_000
+  eval_freq: 1_000
+
+ZeroshotCfg:
+  env_id: "Curriculum/AntMaze_UMaze"
+  num_envs: 16
+  num_samples: 3
+  training_alg: "SAC"
+  policy_network: "MultiInputPolicy"
+  eval_freq: 1_000
+  training_timesteps: 13_000_000
+
+AntMazeObstacleCfg:
+  env_id: "Curriculum/AntMaze_UMaze"
+  eval_env_id: "Curriculum/AntMaze_UMaze"
+  num_envs: 8
+  eval_num_envs: 8
+  training_alg: "SAC"
+  policy_network: "MultiInputPolicy"
+  init_mode: "manual"        # manual | path | llm
+  init_generator_path: null
+  num_stages: 3
+  stage_timesteps: 500_000
+  eval_freq: 1_000
+  evidence_episodes: 5
+  tensorboard_log: true
+  wandb_log: true
+  num_save_video: 3
+  video_fps: 30
+  evolve_enabled: false
+  evolve_after_stage: 0
+  success_rate_low: 0.2
+  success_rate_high: 0.8
+  prompt_dir: "DIVO/gpt/prompt"
+  api_type: "deepseek"
+  api_key: null
+  model: "deepseek-chat"
+  base_url: null
+  temperature: 0.7
+  max_tokens: 2000
+  max_evolve_retries: 3
+  sanity_check_count: 3
+  wandb:
+    project: ACGS-Comparison
+    resume: true
+    mode: online
+    name: "antmaze_obstacle"
+    tags: ["AntMaze_UMaze", "antmaze_obstacle", "obstacle_curriculum"]
+    group: "antmaze_obstacle"

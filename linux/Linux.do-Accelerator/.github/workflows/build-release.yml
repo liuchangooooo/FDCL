@@ -1,0 +1,234 @@
+name: Build Release Packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag to build, for example v1.1.13-beta
+        required: false
+        type: string
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: linux-x64
+            package_cmd: cargo packager -f deb
+          - os: ubuntu-24.04-arm
+            artifact_name: linux-arm64
+            package_cmd: cargo packager -f deb
+          - os: windows-latest
+            artifact_name: windows-x64
+            package_cmd: cargo packager -f nsis
+          - os: windows-11-arm
+            artifact_name: windows-arm64
+            package_cmd: cargo packager -f nsis
+          - os: macos-15
+            artifact_name: macos-arm64
+            package_cmd: cargo packager -f app
+          - os: macos-15-intel
+            artifact_name: macos-intel
+            package_cmd: cargo packager -f app
+
+    runs-on: ${{ matrix.os }}
+    name: Build ${{ matrix.artifact_name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync build version from tag
+        id: sync_version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.release_tag || github.ref_name }}
+        run: |
+          if command -v python3 >/dev/null 2>&1; then
+            python3 ./scripts/ci-sync-version.py
+          else
+            python ./scripts/ci-sync-version.py
+          fi
+          echo "RELEASE_VERSION=${{ github.event.inputs.release_tag || github.ref_name }}" | sed 's/^RELEASE_VERSION=v/RELEASE_VERSION=/' >> "${GITHUB_ENV}"
+          echo "LINUXDO_BUILD_VERSION=${{ github.event.inputs.release_tag || github.ref_name }}" | sed 's/^LINUXDO_BUILD_VERSION=v/LINUXDO_BUILD_VERSION=/' >> "${GITHUB_ENV}"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Use crates.io in CI
+        shell: bash
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml <<'EOF'
+          [registries.crates-io]
+          protocol = "sparse"
+
+          [net]
+          git-fetch-with-cli = true
+          EOF
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libayatana-appindicator3-dev \
+            libgtk-3-dev \
+            libxdo-dev \
+            libxkbcommon-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libssl-dev \
+            pkg-config
+
+      - name: Install cargo-packager
+        run: cargo install cargo-packager --locked
+
+      - name: Install dmgbuild
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          python3 -m venv .dmgbuild-venv
+          ./.dmgbuild-venv/bin/pip install dmgbuild
+          echo "${PWD}/.dmgbuild-venv/bin" >> "${GITHUB_PATH}"
+
+      - name: Build binary
+        run: cargo build --release --locked --bin linuxdo-accelerator
+
+      - name: Package app
+        run: ${{ matrix.package_cmd }}
+
+      - name: Build DMG
+        if: runner.os == 'macOS'
+        run: bash ./scripts/build-macos-dmg.sh
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linuxdo-accelerator-${{ steps.sync_version.outputs.package_version }}-${{ matrix.artifact_name }}
+          path: |
+            dist/**
+            target/release/linuxdo-accelerator*
+
+  build-android:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - abi: arm64-v8a
+            rust_target: aarch64-linux-android
+            artifact_name: android-arm64-v8a
+          - abi: x86_64
+            rust_target: x86_64-linux-android
+            artifact_name: android-x86_64
+
+    runs-on: ubuntu-latest
+    name: Build ${{ matrix.artifact_name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync build version from tag
+        id: sync_version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.release_tag || github.ref_name }}
+        run: |
+          if command -v python3 >/dev/null 2>&1; then
+            python3 ./scripts/ci-sync-version.py
+          else
+            python ./scripts/ci-sync-version.py
+          fi
+          echo "RELEASE_VERSION=${{ github.event.inputs.release_tag || github.ref_name }}" | sed 's/^RELEASE_VERSION=v/RELEASE_VERSION=/' >> "${GITHUB_ENV}"
+          echo "LINUXDO_BUILD_VERSION=${{ github.event.inputs.release_tag || github.ref_name }}" | sed 's/^LINUXDO_BUILD_VERSION=v/LINUXDO_BUILD_VERSION=/' >> "${GITHUB_ENV}"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Use crates.io in CI
+        shell: bash
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml <<'EOF'
+          [registries.crates-io]
+          protocol = "sparse"
+
+          [net]
+          git-fetch-with-cli = true
+          EOF
+
+      - name: Install Android SDK / NDK
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;27.2.12479018"
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Build Android APK
+        shell: bash
+        env:
+          ANDROID_ABI: ${{ matrix.abi }}
+          RUST_TARGET: ${{ matrix.rust_target }}
+          ANDROID_BUILD_TYPE: release
+          APK_OUTPUT_NAME: linuxdo-accelerator-${{ steps.sync_version.outputs.package_version }}-android-${{ matrix.abi }}.apk
+        run: |
+          export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT}/ndk/27.2.12479018"
+          ./scripts/build-android-apk.sh
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linuxdo-accelerator-${{ steps.sync_version.outputs.package_version }}-${{ matrix.artifact_name }}
+          path: |
+            android/dist/*.apk
+
+  publish-release:
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(github.event.inputs.release_tag, 'v'))
+    needs:
+      - build
+      - build-android
+    runs-on: ubuntu-latest
+    name: Publish GitHub Release
+
+    steps:
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: linuxdo-accelerator-*
+          path: release-artifacts
+          merge-multiple: false
+
+      - name: List release files
+        run: find release-artifacts -type f | sort
+
+      - name: Upload assets to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
+          files: |
+            release-artifacts/**/dist/**
+            release-artifacts/**/*.apk
+          generate_release_notes: true
